@@ -519,9 +519,9 @@ function M.AnkiDeck()
   }):find()
 end
 
-function M.AnkiCardType()
+function M.AnkiModel()
   if not pcall(require, "telescope") then
-    vim.notify("Anki: telescope not found (install telescope.nvim to use :AnkiCardType)", vim.log.levels.WARN)
+    vim.notify("Anki: telescope not found (install telescope.nvim to use :AnkiModel)", vim.log.levels.WARN)
     return
   end
 
@@ -757,8 +757,8 @@ function M.setup()
     function() M.AnkiDeck() end,
     { nargs = 0 })
 
-  vim.api.nvim_create_user_command("AnkiCardType",
-    function() M.AnkiCardType() end,
+  vim.api.nvim_create_user_command("AnkiModel",
+    function() M.AnkiModel() end,
     { nargs = 0 })
 end
 

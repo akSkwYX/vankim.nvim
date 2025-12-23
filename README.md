@@ -14,6 +14,9 @@ Designed for fast editing: open a prefilled card buffer, edit fields with normal
 - Field navigation:
   - `:AnkiJump next|precedent` — jump to the next / previous field value.
   - `:AnkiMoveField begining|ending` — move to the beginning / end of the current field's value.
+- Deck and Model selection:
+  - `:AnkiDeck` - open a picker to select the target deck for the current buffer.
+  - `:AnkiModel` - open a picker to select the note model for the current buffer.
 - Minimal, dependency-free requests (uses `curl` by default; optionally adaptable to job-based async calls).
 
 ## Prerequisites
@@ -40,6 +43,8 @@ Add this to `require("lazy").setup({ ... })`:
     { "<leader>ak", "<cmd>AnkiJump previous<cr>", desc = "Anki: Jump to previous field" },
     { "<leader>ab", "<cmd>AnkiMoveField beginning<cr>", desc = "Anki: Move to begining of field" },
     { "<leader>ae", "<cmd>AnkiMoveField end<cr>", desc = "Anki: Move to end of field" },
+    { "<leader>ad", "<cmd>AnkiDeck<cr>", desc = "Anki: Select Deck" },
+    { "<leader>am", "<cmd>AnkiModel<cr>", desc = "Anki: Select Model" },
   },
   config = function()
     require("vankim").setup()
