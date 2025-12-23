@@ -145,13 +145,6 @@ local function open_card_buffer(model, deck, fields)
 
   vim.api.nvim_buf_set_option(buf, "filetype", "anki")
 
-  -- Set up autocmds for updating highlights on change (buffer-local)
-  -- Remove any previous autocmds for this buffer name to avoid duplicates
-  -- vim.api.nvim_create_autocmd({ "BufEnter", "TextChanged", "TextChangedI" }, {
-  --   buffer = buf,
-  --   callback = function() update_highlights(buf) end,
-  -- })
-
   -- initial highlight pass
   update_highlights(buf)
 
@@ -219,7 +212,6 @@ local function parse_opts_to_fargs(opts)
   return {}
 end
 
--- Replace start of M.AnkiNew with this (rest of function stays the same)
 function M.AnkiNew(opts)
   local fargs = parse_opts_to_fargs(opts)
 
@@ -229,30 +221,16 @@ function M.AnkiNew(opts)
   if fargs and #fargs >= 2 and fargs[2] ~= "" then deck = fargs[2] end
 
   local last_model, last_deck = get_last()
-  if not model then model = last_model end
-  if not deck  then deck  = last_deck  end
+  model = model or last_model or ""
+  deck = deck or last_deck or ""
 
-  if not deck then
-    local d, err = first_deck_name()
-    if not d then
-      vim.notify("Anki: failed to get a deck list: "..tostring(err), vim.log.levels.ERROR)
+  local fields = {}
+  if model ~= "" then 
+    local fields, err = get_model_fields(model)
+    if not fields then
+      vim.notify("Anki: failed to fetch model fields for '"..model.."': "..tostring(err), vim.log.levels.ERROR)
       return
     end
-    deck = d
-  end
-
-  if not model then
-    model = vim.fn.input("Anki model name (note type): ")
-    if model == "" then
-      vim.notify("Anki: no model specified", vim.log.levels.ERROR)
-      return
-    end
-  end
-
-  local fields, err = get_model_fields(model)
-  if not fields then
-    vim.notify("Anki: failed to fetch model fields for '"..model.."': "..tostring(err), vim.log.levels.ERROR)
-    return
   end
 
   set_last(model, deck)
@@ -440,6 +418,192 @@ function M.AnkiMoveField(opts)
   end
 end
 
+-- Add Telescope-based selectors for deck and card type
+local function ensure_telescope()
+  local ok, _ = pcall(require, "telescope")
+  return ok
+end
+
+local function set_header_in_buffer(buf, header, value)
+  local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+  for i, l in ipairs(lines) do
+    if l:match("^%s*" .. vim.pesc(header) .. "%s*:") then
+      lines[i] = header .. ": " .. value
+      vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+      return true
+    end
+  end
+  -- if header missing, insert at top
+  table.insert(lines, 1, header .. ": " .. value)
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+  return true
+end
+
+-- Rebuild current Anki buffer content for a model, deck and a list of values aligned with fields.
+-- fields_list: array of field names (in order)
+-- values: array of strings (may be multi-line) aligned with fields_list
+local function rebuild_buffer_with_values(buf, model, deck, fields_list, values)
+  buf = buf or vim.api.nvim_get_current_buf()
+  local lines = {}
+  table.insert(lines, "CardType: " .. (model or ""))
+  table.insert(lines, "Deck: " .. (deck or ""))
+  table.insert(lines, "")
+  table.insert(lines, "")
+
+  for i, fname in ipairs(fields_list) do
+    table.insert(lines, fname .. ":")
+    local val = values and values[i] or ""
+    if val == nil or val == "" then
+      table.insert(lines, "")
+      table.insert(lines, "")
+      table.insert(lines, "")
+    else
+      -- split on \n and insert lines
+      for s in (val .. "\n"):gmatch("(.-)\n") do
+        table.insert(lines, s)
+      end
+    end
+  end
+
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+  vim.api.nvim_buf_set_option(buf, "filetype", "anki")
+  update_highlights(buf)
+  return buf
+end
+
+function M.AnkiDeck()
+  if not pcall(require, "telescope") then
+    vim.notify("Anki: telescope not found (install telescope.nvim to use :AnkiDeck)", vim.log.levels.WARN)
+    return
+  end
+
+  local pickers = require("telescope.pickers")
+  local finders = require("telescope.finders")
+  local conf = require("telescope.config").values
+  local actions = require("telescope.actions")
+  local action_state = require("telescope.actions.state")
+
+  local decks, err = ankiconnect_request({ action = "deckNames", version = M.api_version })
+  if not decks then vim.notify("Anki: failed to fetch decks: " .. tostring(err), vim.log.levels.ERROR); return end
+
+  pickers.new({}, {
+    prompt_title = "Anki decks",
+    finder = finders.new_table { results = decks },
+    sorter = conf.generic_sorter({}),
+    attach_mappings = function(prompt_bufnr, map)
+      actions.select_default:replace(function()
+        local selection = action_state.get_selected_entry()
+        actions.close(prompt_bufnr)
+        local chosen = selection[1]
+        local buf = vim.api.nvim_get_current_buf()
+        -- update only the Deck: header line, preserve buffer text
+        local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+        local updated = false
+        for i, l in ipairs(lines) do
+          if l:match("^%s*Deck:%s*") then
+            lines[i] = "Deck: " .. chosen
+            updated = true
+            break
+          end
+        end
+        if not updated then
+          table.insert(lines, 2, "Deck: " .. chosen) -- insert after CardType
+        end
+        vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+        set_last(nil, chosen)
+        update_highlights(buf)
+        vim.notify("Anki: deck set to " .. chosen, vim.log.levels.INFO)
+      end)
+      return true
+    end,
+  }):find()
+end
+
+function M.AnkiCardType()
+  if not pcall(require, "telescope") then
+    vim.notify("Anki: telescope not found (install telescope.nvim to use :AnkiCardType)", vim.log.levels.WARN)
+    return
+  end
+
+  local pickers = require("telescope.pickers")
+  local finders = require("telescope.finders")
+  local conf = require("telescope.config").values
+  local actions = require("telescope.actions")
+  local action_state = require("telescope.actions.state")
+
+  local models, err = ankiconnect_request({ action = "modelNames", version = M.api_version })
+  if not models then vim.notify("Anki: failed to fetch models: " .. tostring(err), vim.log.levels.ERROR); return end
+
+  pickers.new({}, {
+    prompt_title = "Anki models (card types)",
+    finder = finders.new_table { results = models },
+    sorter = conf.generic_sorter({}),
+    attach_mappings = function(prompt_bufnr, map)
+      actions.select_default:replace(function()
+        local selection = action_state.get_selected_entry()
+        actions.close(prompt_bufnr)
+        local new_model = selection[1]
+
+        -- parse current buffer content
+        local buf = vim.api.nvim_get_current_buf()
+        local parsed = parse_current_buffer()
+        local old_fields_map = parsed.fields or {}
+        -- get names in order from current buffer using positions
+        local old_pos = get_field_positions(buf)
+        local old_order = {}
+        for _, f in ipairs(old_pos) do table.insert(old_order, f.name) end
+
+        local deck = parsed.deck or vim.g.anki_last_deck or (first_deck_name() or "")
+
+        -- fetch new model field names
+        local new_fields, ferr = get_model_fields(new_model)
+        if not new_fields then
+          vim.notify("Anki: failed to fetch fields for model '" .. new_model .. "': " .. tostring(ferr), vim.log.levels.ERROR)
+          return
+        end
+
+        -- Build new values aligned with new_fields:
+        -- 1) fill from old_fields_map by exact name match
+        -- 2) for remaining new positions, fill from old_order by index if not yet consumed
+        local used_old = {}
+        local values = {}
+
+        -- step 1: name matches
+        for i, nf in ipairs(new_fields) do
+          if old_fields_map[nf] then
+            values[i] = old_fields_map[nf]
+            used_old[nf] = true
+          end
+        end
+
+        -- step 2: index-preserve for remaining fields
+        local old_idx = 1
+        for i = 1, #new_fields do
+          if values[i] == nil then
+            -- advance old_idx to next not-used old field
+            while old_idx <= #old_order and used_old[ old_order[old_idx] ] do old_idx = old_idx + 1 end
+            if old_idx <= #old_order then
+              local name_at_idx = old_order[old_idx]
+              values[i] = old_fields_map[name_at_idx] or ""
+              used_old[name_at_idx] = true
+              old_idx = old_idx + 1
+            else
+              values[i] = ""
+            end
+          end
+        end
+
+        -- persist last used and rebuild buffer with preserved values
+        set_last(new_model, deck)
+        rebuild_buffer_with_values(buf, new_model, deck, new_fields, values)
+        vim.notify("Anki: changed model to " .. new_model, vim.log.levels.INFO)
+      end)
+      return true
+    end,
+  }):find()
+end
+
+
 
 -- Setup: create user commands
 -- Completion for :AnkiNew that wraps suggestions in quotes but still filters on partial input.
@@ -467,39 +631,38 @@ local function quote_candidate(s, preferred_quote)
   end
 end
 
--- anki_new_complete uses split_args (already in your file) to determine argument index.
 local function anki_new_complete(arg_lead, cmd_line, cursor_pos)
-  -- Determine text up to cursor to correctly parse quoted tokens
   local before_cursor = cmd_line
   if cursor_pos and type(cursor_pos) == "number" and cursor_pos <= #cmd_line then
     before_cursor = cmd_line:sub(1, cursor_pos)
   end
 
   local parts = split_args(before_cursor)
-  -- which argument are we completing? parts[1] is "AnkiNew"
-  local arg_index = #parts -- number of tokens currently typed (includes the token being completed if any)
-  if arg_index == 0 then arg_index = 1 end
-  -- If the user has started typing the token (arg_lead), detect opening quote
+  local arg_index = nil
+  if arg_lead and #arg_lead > 0 then
+    arg_index = #parts - 1
+  else 
+    arg_index = #parts
+  end
+
   local prefer_quote = nil
   if arg_lead and #arg_lead > 0 then
     local first = arg_lead:sub(1,1)
     if first == '"' or first == "'" then prefer_quote = first end
   end
-
   local search_lead = arg_lead or ""
   if prefer_quote then search_lead = search_lead:sub(2) end
   search_lead = search_lead:lower()
 
-  local function format_matches(list)
+  -- generic model formatting
+  local function format_model_matches(list)
     local out = {}
     for _, name in ipairs(list) do
       local lname = name:lower()
       if search_lead == "" or lname:find("^" .. vim.pesc(search_lead)) then
         if prefer_quote then
-          -- user opened a quote: complete inside it (don't return surrounding quotes)
           table.insert(out, escape_for_quote(name, prefer_quote))
         else
-          -- If name contains whitespace or quotes, return quoted form; otherwise return unquoted to allow bare usage.
           if name:find("%s") or name:find('"') or name:find("'") then
             table.insert(out, quote_candidate(name, nil))
           else
@@ -511,14 +674,63 @@ local function anki_new_complete(arg_lead, cmd_line, cursor_pos)
     return out
   end
 
+  -- deck-aware formatting: show both top-level names and full deck names; match suffix segment
+  local function format_deck_matches(list)
+    local out = {}
+    local seen = {}
+
+    -- normalize user's typed prefix: collapse any sequence of colons to '::'
+    local norm = (search_lead or ""):gsub(":+", "::")
+
+    local has_separator = norm:find("::", 1, true) ~= nil
+
+    for _, deck in ipairs(list) do
+      local lname = deck:lower()
+      local topo = lname:match("^[^:]+") or lname
+      local lastseg = lname:match("([^:]+)$") or lname
+
+      if has_separator then
+        -- user asked for a specific path: match full deck names starting with normalized prefix
+        if norm == "" or lname:find("^" .. vim.pesc(norm)) then
+          local candidate = deck
+          if prefer_quote then candidate = escape_for_quote(candidate, prefer_quote)
+          else candidate = (deck:find("%s") or deck:find('"') or deck:find("'")) and quote_candidate(deck, nil) or deck end
+          if not seen[candidate] then seen[candidate] = true; table.insert(out, candidate) end
+        end
+      else
+        -- no separator typed: offer top-level deck names (deduped) and also decks whose full name starts with the prefix
+        if search_lead == "" then
+          -- when nothing typed, include top-level names and also any top-level full names (keeps examples simple)
+          local top = deck:match("^[^:]+") or deck
+          if top and not seen[top] then seen[top] = true; table.insert(out, top) end
+        else
+          -- match either full deck prefix OR top-level name prefix OR last segment prefix
+          if lname:find("^" .. vim.pesc(norm)) or topo:find("^" .. vim.pesc(norm)) or lastseg:find("^" .. vim.pesc(norm)) then
+            -- prefer returning top-level token (topo) to let user pick root decks, but also return full name if it is a single-level deck or if it matches fully
+            local top = deck:match("^[^:]+") or deck
+            if topo:find("^" .. vim.pesc(norm)) and not seen[top] then seen[top] = true; table.insert(out, top) end
+            if (lname:find("^" .. vim.pesc(norm)) or lastseg:find("^" .. vim.pesc(norm))) then
+              local candidate = deck
+              if prefer_quote then candidate = escape_for_quote(candidate, prefer_quote)
+              else candidate = (deck:find("%s") or deck:find('"') or deck:find("'")) and quote_candidate(deck, nil) or deck end
+              if not seen[candidate] then seen[candidate] = true; table.insert(out, candidate) end
+            end
+          end
+        end
+      end
+    end
+
+    return out
+  end
+
   if arg_index <= 1 then
     local res = ankiconnect_request({ action = "modelNames", version = M.api_version })
     if not res or type(res) ~= "table" then return {} end
-    return format_matches(res)
+    return format_model_matches(res)
   elseif arg_index == 2 then
     local res = ankiconnect_request({ action = "deckNames", version = M.api_version })
     if not res or type(res) ~= "table" then return {} end
-    return format_matches(res)
+    return format_deck_matches(res)
   else
     return {}
   end
@@ -540,6 +752,14 @@ function M.setup()
   vim.api.nvim_create_user_command("AnkiMoveField",
     function(opts) M.AnkiMoveField(opts) end,
     { nargs = "?", complete = function() return { "beginning", "begining", "ending", "end" } end})
+
+  vim.api.nvim_create_user_command("AnkiDeck",
+    function() M.AnkiDeck() end,
+    { nargs = 0 })
+
+  vim.api.nvim_create_user_command("AnkiCardType",
+    function() M.AnkiCardType() end,
+    { nargs = 0 })
 end
 
 -- Auto-setup on require() (optional)
