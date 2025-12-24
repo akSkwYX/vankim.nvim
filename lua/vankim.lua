@@ -364,13 +364,42 @@ local function parse_current_buffer()
   return { model = model, deck = deck, fields = fields }
 end
 
--- Public command: AnkiSend
-function M.AnkiSend(args)
-  if args and args[1] and args[1] == "true" then
-    local reset = true
-  else
-    local reset = false
+-- Rebuild current Anki buffer content for a model, deck and a list of values aligned with fields.
+-- fields_list: array of field names (in order)
+-- values: array of strings (may be multi-line) aligned with fields_list
+local function rebuild_buffer_with_values(buf, model, deck, fields_list, values)
+  buf = buf or vim.api.nvim_get_current_buf()
+  local lines = {}
+  table.insert(lines, "CardType: " .. (model or ""))
+  table.insert(lines, "Deck: " .. (deck or ""))
+  table.insert(lines, "")
+  table.insert(lines, "")
+
+  for i, fname in ipairs(fields_list) do
+    table.insert(lines, fname .. ":")
+    local val = values and values[i] or ""
+    if val == nil or val == "" then
+      table.insert(lines, "")
+      table.insert(lines, "")
+      table.insert(lines, "")
+    else
+      -- split on \n and insert lines
+      for s in (val .. "\n"):gmatch("(.-)\n") do
+        table.insert(lines, s)
+      end
+    end
   end
+
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+  vim.api.nvim_buf_set_option(buf, "filetype", "anki")
+  update_highlights(buf)
+  return buf
+end
+
+-- Public command: AnkiSend
+function M.AnkiSend(arg)
+  local reset = false
+  if arg and arg.args == "true" then reset = true end
 
   local parsed = parse_current_buffer()
   if not parsed.model then
@@ -396,9 +425,10 @@ function M.AnkiSend(args)
     return
   end
   set_last(parsed.model, parsed.deck)
-  vim.notify("Anki: note added (id: "..tostring(res)..")", vim.log.levels.INFO)
+  if not reset then vim.notify("Anki: note added (id: "..tostring(res)..")", vim.log.levels.INFO) end
 
   if reset then
+    local buf = vim.api.nvim_get_current_buf()
     local model = parsed.model
     local deck = parsed.deck
     local fields, err = get_model_fields(model)
@@ -407,8 +437,8 @@ function M.AnkiSend(args)
       return
     end
 
-    open_card_buffer(model, deck, fields)
-    vim.notify("Anki: opened editor for model '"..model.."' (deck: "..deck..")", vim.log.levels.INFO)
+    rebuild_buffer_with_values(buf, model, deck, fields, nil)
+    -- vim.notify("Anki: reset editor for model '"..model.."' (deck: "..deck..")", vim.log.levels.INFO)
   end
 end
 
@@ -465,37 +495,6 @@ local function set_header_in_buffer(buf, header, value)
   return true
 end
 
--- Rebuild current Anki buffer content for a model, deck and a list of values aligned with fields.
--- fields_list: array of field names (in order)
--- values: array of strings (may be multi-line) aligned with fields_list
-local function rebuild_buffer_with_values(buf, model, deck, fields_list, values)
-  buf = buf or vim.api.nvim_get_current_buf()
-  local lines = {}
-  table.insert(lines, "CardType: " .. (model or ""))
-  table.insert(lines, "Deck: " .. (deck or ""))
-  table.insert(lines, "")
-  table.insert(lines, "")
-
-  for i, fname in ipairs(fields_list) do
-    table.insert(lines, fname .. ":")
-    local val = values and values[i] or ""
-    if val == nil or val == "" then
-      table.insert(lines, "")
-      table.insert(lines, "")
-      table.insert(lines, "")
-    else
-      -- split on \n and insert lines
-      for s in (val .. "\n"):gmatch("(.-)\n") do
-        table.insert(lines, s)
-      end
-    end
-  end
-
-  vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
-  vim.api.nvim_buf_set_option(buf, "filetype", "anki")
-  update_highlights(buf)
-  return buf
-end
 
 function M.AnkiDeck()
   if not pcall(require, "telescope") then
@@ -799,8 +798,8 @@ function M.setup()
     { nargs = "*", range = true, complete = anki_new_complete })
 
   vim.api.nvim_create_user_command("AnkiSend",
-    function() M.AnkiSend() end,
-    { nargs = "*"})
+    function(arg) M.AnkiSend(arg) end,
+    { nargs = 1, complete = function () return { "true", "false" } end })
 
   vim.api.nvim_create_user_command("AnkiJump",
     function(opts) M.AnkiJump(opts) end,
