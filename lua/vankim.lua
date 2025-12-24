@@ -1,10 +1,11 @@
--- lua/anki.lua
+-- lua/vankim.lua
 -- Minimal Neovim helper to create Anki cards using AnkiConnect (via curl + JSON).
 -- Usage:
 --   :AnkiNew [CardType] [DeckName]
 --   :AnkiSend [true|false]
---   :AnkiJump [next|previous]
---   :AnkiMoveField [beginning|end]
+--   :AnkiJump [next|previous|beginning|end]
+--   :AnkiDeck
+--   :AnkiModel
 
 local M = {}
 
@@ -107,13 +108,6 @@ local function get_model_fields(model_name)
   return ankiconnect_request(payload)
 end
 
--- Fallback to any deck if none provided
-local function first_deck_name()
-  local res, err = ankiconnect_request({ action = "deckNames", version = M.api_version })
-  if not res then return nil, err end
-  return res[1], nil
-end
-
 -- Create a scratch buffer prefilled with headers and fields
 local function open_card_buffer(model, deck, fields)
   -- Prepare lines
@@ -212,6 +206,60 @@ local function parse_opts_to_fargs(opts)
   return {}
 end
 
+local function split_into_lines(s)
+  if not s or s == "" then return { "" } end
+  local out = {}
+  for line in (s .. "\n"):gmatch("(.-)\n") do table.insert(out, line) end
+  return out
+end
+
+local function get_field_positions(buf)
+  buf = buf or vim.api.nvim_get_current_buf()
+  local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+  local fields = {}
+  local i = 3
+  while i <= #lines do
+    local l = lines[i]
+    -- detect header lines of the form "FieldName:" optionally with trailing spaces
+    local name = l:match("^%s*([^:]+):%s*$")
+    if name then
+      local header = i
+      local start = header + 1
+      while start <= #lines and lines[start]:match("^%s*$") do start = start + 1 end
+      if start > #lines or lines[start]:match("^%s*[^:]+:%s*$") then
+        -- next line is another header: empty field
+        table.insert(fields, { name = name, header = header, start = start-2, ending = start-2 })
+        i = start
+      else
+        local j = start
+        while j <= #lines and not lines[j]:match("^%s*[^:]+:%s*$") do j = j + 1 end
+        local end_line = j - 1
+        while end_line > start and lines[end_line]:match("^%s*$") do end_line = end_line - 1 end
+        table.insert(fields, { name = name, header = header, start = start, ending = end_line })
+        i = j
+      end
+    else
+      i = i + 1
+    end
+  end
+  return fields
+end
+
+-- Set the i-th field (1-based) value in buf. Replaces the lines that were the previous value.
+local function set_field_value(buf, field_index, text)
+  buf = buf or vim.api.nvim_get_current_buf()
+  local fields = get_field_positions(buf)
+  local f = fields[field_index]
+  if not f then return false, "field index out of range" end
+  local new_lines = split_into_lines(text)
+  -- replace existing value region [start, end] (1-based lines -> 0-based indexes)
+  local start0 = f.start - 1
+  local end0 = f.ending
+  vim.api.nvim_buf_set_lines(buf, start0, end0, false, new_lines)
+  update_highlights(buf)
+  return true
+end
+
 function M.AnkiNew(opts)
   local fargs = parse_opts_to_fargs(opts)
 
@@ -224,17 +272,52 @@ function M.AnkiNew(opts)
   model = model or last_model or ""
   deck = deck or last_deck or ""
 
+  local sel_text = nil
+  if type(opts) == "table" and opts.range and opts.line1 and opts.line2 then
+    local buf = vim.api.nvim_get_current_buf()
+    local start_line = tonumber(opts.line1)
+    local end_line = tonumber(opts.line2)
+    if start_line and end_line and end_line >= start_line then
+      local lines = vim.api.nvim_buf_get_lines(buf, start_line - 1, end_line, false)
+      sel_text = table.concat(lines, "\n")
+    end
+  else
+    local sel_start = vim.fn.getpos("'<")[2] or 0
+    local sel_end = vim.fn.getpos("'>")[2] or 0
+    if sel_start > 0 and sel_end >= sel_start then
+      local curbuf = vim.api.nvim_get_current_buf()
+      local lines = vim.api.nvim_buf_get_lines(curbuf, sel_start-1, sel_end, false)
+      sel_text = table.concat(lines, "\n")
+    end
+  end
+
+  -- If selection exists but no model is known, error out
+  if sel_text and (not model or model == "") then
+    vim.notify("Anki: cannot use visual selection as first field — no model specified or last model available.", vim.log.levels.ERROR)
+    return
+  end
+
   local fields = {}
-  if model ~= "" then 
-    local fields, err = get_model_fields(model)
+  if model and model ~= "" then
+    local loc_fields, err = get_model_fields(model)
     if not fields then
       vim.notify("Anki: failed to fetch model fields for '"..model.."': "..tostring(err), vim.log.levels.ERROR)
       return
     end
+    fields = loc_fields
   end
 
   set_last(model, deck)
-  open_card_buffer(model, deck, fields)
+  local buf = open_card_buffer(model, deck, fields)
+
+  -- If we captured a visual selection, set it as the first field's value
+  if sel_text and sel_text ~= "" then
+    local ok, msg = set_field_value(buf, 1, sel_text)
+    if not ok then
+      vim.notify("Anki: failed to set selection into first field: " .. tostring(msg), vim.log.levels.WARN)
+    end
+  end
+
   vim.notify("Anki: opened editor for model '"..model.."' (deck: "..deck..")", vim.log.levels.INFO)
 end
 
@@ -329,45 +412,17 @@ function M.AnkiSend(args)
   end
 end
 
--- Return a list of field descriptors { name, header, start, ["end"] } (1-based line numbers)
-local function get_field_positions(buf)
-  buf = buf or vim.api.nvim_get_current_buf()
-  local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
-  local fields = {}
-  local i = 3
-  while i <= #lines do
-    local l = lines[i]
-    -- detect header lines of the form "FieldName:" optionally with trailing spaces
-    local name = l:match("^%s*([^:]+):%s*$")
-    if name then
-      local header = i
-      local start = header + 1
-      while start <= #lines and lines[start]:match("^%s*$") do start = start + 1 end
-      if start > #lines or lines[start]:match("^%s*[^:]+:%s*$") then
-        -- next line is another header: empty field
-        table.insert(fields, { name = name, header = header, start = start-2, ending = start-2 })
-        i = start
-      else
-        local j = start
-        while j <= #lines and not lines[j]:match("^%s*[^:]+:%s*$") do j = j + 1 end
-        local end_line = j - 1
-        while end_line > start and lines[end_line]:match("^%s*$") do end_line = end_line - 1 end
-        table.insert(fields, { name = name, header = header, start = start, ending = end_line })
-        i = j
-      end
-    else
-      i = i + 1
-    end
-  end
-  return fields
-end
 
 -- Jump to the next / previous field's value. Accepts opts (user command table) or a string.
 function M.AnkiJump(opts)
   local arg = nil
   if type(opts) == "table" and opts.args then arg = opts.args:lower() elseif type(opts) == "string" then arg = opts:lower() end
-  local forward = true
-  if arg == "precedent" or arg == "prev" or arg == "p" or arg == "previous" then forward = false end
+  local direction = 0
+  if arg == "precedent" or arg == "prev" or arg == "p" or arg == "previous" then 
+    direction = -1
+  elseif arg == "next" or arg == "n" then
+    direction = 1
+  end
 
   local buf = vim.api.nvim_get_current_buf()
   local row = vim.api.nvim_win_get_cursor(0)[1]
@@ -379,43 +434,14 @@ function M.AnkiJump(opts)
   while current_field <= #fields and fields[current_field].header < row do
     current_field = current_field + 1
   end
-  if forward then
-    target = fields[current_field] or fields[1]
-  else
-    target = fields[current_field - 2] or fields[#fields]
+  current_field = current_field - 1
+  target = fields[(current_field+direction) % #fields]
+
+  local position = { target.start, 0 }
+  if arg == "ending" or arg == "end" or arg == "e" then 
+    position = { target.ending, #(vim.api.nvim_get_current_line()) - 1 } 
   end
-
-  local to_line = target.start
-  vim.api.nvim_win_set_cursor(0, { to_line, 0 })
-end
-
--- Move inside the current field: to beginning or end of its value.
-function M.AnkiMoveField(opts)
-  local arg = nil
-  if type(opts) == "table" and opts.args then arg = opts.args:lower() elseif type(opts) == "string" then arg = opts:lower() end
-  local to_begin = true
-  if arg == "ending" or arg == "end" then to_begin = false end
-
-  local buf = vim.api.nvim_get_current_buf()
-  local row = vim.api.nvim_win_get_cursor(0)[1]
-  local fields = get_field_positions(buf)
-  if #fields == 0 then vim.notify("Anki: no fields found", vim.log.levels.WARN); return end
-
-  -- find the field that contains or precedes the cursor
-  local current_field = 1
-  while current_field <= #fields and fields[current_field].header < row do
-    current_field = current_field + 1
-  end
-
-  if to_begin then
-    local target_line = fields[current_field-1].start
-    vim.api.nvim_win_set_cursor(0, { target_line, 0 })
-  else
-    local target_line = fields[current_field-1].ending
-    local text = vim.api.nvim_buf_get_lines(buf, target_line-1, target_line, false)[1] or ""
-    local col = #text
-    vim.api.nvim_win_set_cursor(0, { target_line, col })
-  end
+  vim.api.nvim_win_set_cursor(0, position)
 end
 
 -- Add Telescope-based selectors for deck and card type
@@ -553,7 +579,7 @@ function M.AnkiModel()
         local old_order = {}
         for _, f in ipairs(old_pos) do table.insert(old_order, f.name) end
 
-        local deck = parsed.deck or vim.g.anki_last_deck or (first_deck_name() or "")
+        local deck = parsed.deck or vim.g.anki_last_deck or ""
 
         -- fetch new model field names
         local new_fields, ferr = get_model_fields(new_model)
@@ -634,7 +660,7 @@ end
 local function anki_new_complete(arg_lead, cmd_line, cursor_pos)
   local before_cursor = cmd_line
   if cursor_pos and type(cursor_pos) == "number" and cursor_pos <= #cmd_line then
-    before_cursor = cmd_line:sub(1, cursor_pos)
+    before_cursor = cmd_line:sub(#(cmd_line:match(".*AnkiNew%s*") or ""), cursor_pos)
   end
 
   local parts = split_args(before_cursor)
@@ -723,11 +749,11 @@ local function anki_new_complete(arg_lead, cmd_line, cursor_pos)
     return out
   end
 
-  if arg_index <= 1 then
+  if arg_index <= 0 then
     local res = ankiconnect_request({ action = "modelNames", version = M.api_version })
     if not res or type(res) ~= "table" then return {} end
     return format_model_matches(res)
-  elseif arg_index == 2 then
+  elseif arg_index == 1 then
     local res = ankiconnect_request({ action = "deckNames", version = M.api_version })
     if not res or type(res) ~= "table" then return {} end
     return format_deck_matches(res)
@@ -736,10 +762,41 @@ local function anki_new_complete(arg_lead, cmd_line, cursor_pos)
   end
 end
 
+local function anki_move_to_field_complete(arg_lead, cmd_line, cursor_pos)
+  local directions = { "next", "previous" }
+  local positions = { "beginning", "ending" }
+  local parts = split_args(cmd_line)
+  local arg_index = nil
+  if arg_lead and #arg_lead > 0 then
+    arg_index = #parts - 1
+  else
+    arg_index = #parts
+  end
+  if arg_index == 1 then
+    local out = {}
+    for _, d in ipairs(directions) do
+      if arg_lead == "" or d:find("^" .. vim.pesc(arg_lead:lower())) then
+        table.insert(out, d)
+      end
+    end
+    return out
+  elseif arg_index == 2 then
+    local out = {}
+    for _, p in ipairs(positions) do
+      if arg_lead == "" or p:find("^" .. vim.pesc(arg_lead:lower())) then
+        table.insert(out, p)
+      end
+    end
+    return out
+  else
+    return {}
+  end
+end
+
 function M.setup()
   vim.api.nvim_create_user_command("AnkiNew",
     function(opts) M.AnkiNew(opts.fargs) end,
-    { nargs = "*", complete = anki_new_complete })
+    { nargs = "*", range = true, complete = anki_new_complete })
 
   vim.api.nvim_create_user_command("AnkiSend",
     function() M.AnkiSend() end,
@@ -747,11 +804,7 @@ function M.setup()
 
   vim.api.nvim_create_user_command("AnkiJump",
     function(opts) M.AnkiJump(opts) end,
-    { nargs = "?", complete = function() return { "next", "previous" } end})
-
-  vim.api.nvim_create_user_command("AnkiMoveField",
-    function(opts) M.AnkiMoveField(opts) end,
-    { nargs = "?", complete = function() return { "beginning", "begining", "ending", "end" } end})
+    { nargs = "?", complete = function() return { "next", "previous", "beginning", "ending" } end})
 
   vim.api.nvim_create_user_command("AnkiDeck",
     function() M.AnkiDeck() end,
