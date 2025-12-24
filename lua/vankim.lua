@@ -435,7 +435,7 @@ function M.AnkiJump(opts)
     current_field = current_field + 1
   end
   current_field = current_field - 1
-  target = fields[(current_field+direction) % #fields]
+  target = fields[((current_field-1+direction) % #fields) + 1]
 
   local position = { target.start, 0 }
   if arg == "ending" or arg == "end" or arg == "e" then 
