@@ -671,14 +671,12 @@ local function anki_new_complete(arg_lead, cmd_line, cursor_pos)
   end
   local search_lead = arg_lead or ""
   if prefer_quote then search_lead = search_lead:sub(2) end
-  search_lead = search_lead:lower()
 
   -- generic model formatting
   local function format_model_matches(list)
     local out = {}
     for _, name in ipairs(list) do
-      local lname = name:lower()
-      if search_lead == "" or lname:find("^" .. vim.pesc(search_lead)) then
+      if search_lead == "" or name:find("^" .. vim.pesc(search_lead)) then
         if prefer_quote then
           table.insert(out, escape_for_quote(name, prefer_quote))
         else
@@ -695,48 +693,50 @@ local function anki_new_complete(arg_lead, cmd_line, cursor_pos)
 
   -- deck-aware formatting: show both top-level names and full deck names; match suffix segment
   local function format_deck_matches(list)
+    print("Formatting decks for lead: " .. search_lead)
     local out = {}
     local seen = {}
 
-    -- normalize user's typed prefix: collapse any sequence of colons to '::'
-    local norm = (search_lead or ""):gsub(":+", "::")
-
-    local has_separator = norm:find("::", 1, true) ~= nil
-
-    for _, deck in ipairs(list) do
-      local lname = deck:lower()
-      local topo = lname:match("^[^:]+") or lname
-      local lastseg = lname:match("([^:]+)$") or lname
-
-      if has_separator then
-        -- user asked for a specific path: match full deck names starting with normalized prefix
-        if norm == "" or lname:find("^" .. vim.pesc(norm)) then
-          local candidate = deck
-          if prefer_quote then candidate = escape_for_quote(candidate, prefer_quote)
-          else candidate = (deck:find("%s") or deck:find('"') or deck:find("'")) and quote_candidate(deck, nil) or deck end
-          if not seen[candidate] then seen[candidate] = true; table.insert(out, candidate) end
-        end
-      else
-        -- no separator typed: offer top-level deck names (deduped) and also decks whose full name starts with the prefix
-        if search_lead == "" then
-          -- when nothing typed, include top-level names and also any top-level full names (keeps examples simple)
-          local top = deck:match("^[^:]+") or deck
-          if top and not seen[top] then seen[top] = true; table.insert(out, top) end
-        else
-          -- match either full deck prefix OR top-level name prefix OR last segment prefix
-          if lname:find("^" .. vim.pesc(norm)) or topo:find("^" .. vim.pesc(norm)) or lastseg:find("^" .. vim.pesc(norm)) then
-            -- prefer returning top-level token (topo) to let user pick root decks, but also return full name if it is a single-level deck or if it matches fully
-            local top = deck:match("^[^:]+") or deck
-            if topo:find("^" .. vim.pesc(norm)) and not seen[top] then seen[top] = true; table.insert(out, top) end
-            if (lname:find("^" .. vim.pesc(norm)) or lastseg:find("^" .. vim.pesc(norm))) then
-              local candidate = deck
-              if prefer_quote then candidate = escape_for_quote(candidate, prefer_quote)
-              else candidate = (deck:find("%s") or deck:find('"') or deck:find("'")) and quote_candidate(deck, nil) or deck end
-              if not seen[candidate] then seen[candidate] = true; table.insert(out, candidate) end
+    if search_lead == "" then
+      for _, deck in ipairs(list) do
+        local top = deck:match("^[^:]+") or deck
+        if not seen[top] then
+          seen[top] = true
+          if prefer_quote then
+            table.insert(out, escape_for_quote(top, prefer_quote))
+          else
+            if top:find("%s") or top:find('"') or top:find("'") then
+              table.insert(out, quote_candidate(top, nil))
+            else
+              table.insert(out, top)
             end
           end
         end
       end
+      return out
+    end
+    for _, deck in ipairs(list) do
+      local lead, name = deck:match("(" .. vim.pesc(search_lead) .. ")(.*)$") 
+      if lead == nil then goto continue end
+      if name == nil then table.insert(out, name); goto continue end
+      local colon, rest = name:match("^(::)(.*)$") or "", name
+      print("Colon : " .. colon .. " Rest: " .. rest)
+      local name, _ = rest:match("(.*)((::).*)$") or rest, ""
+      print("Name: " .. name)
+      name = lead .. colon .. name
+      if not seen[name] then
+        seen[name] = true
+        if prefer_quote then
+          table.insert(out, escape_for_quote(name, prefer_quote))
+        else
+          if name:find("%s") or name:find('"') or name:find("'") then
+            table.insert(out, quote_candidate(name, nil))
+          else
+            table.insert(out, name)
+          end
+        end
+      end
+      ::continue::
     end
 
     return out
@@ -744,11 +744,17 @@ local function anki_new_complete(arg_lead, cmd_line, cursor_pos)
 
   if arg_index <= 0 then
     local res = ankiconnect_request({ action = "modelNames", version = M.api_version })
-    if not res or type(res) ~= "table" then return {} end
+    if not res or type(res) ~= "table" then 
+      vim.notify("Vankim: failed to fetch model names (Is Anki running with AnkiConnect?)", vim.log.levels.ERROR)
+      return {}
+    end
     return format_model_matches(res)
   elseif arg_index == 1 then
     local res = ankiconnect_request({ action = "deckNames", version = M.api_version })
-    if not res or type(res) ~= "table" then return {} end
+    if not res or type(res) ~= "table" then 
+      vim.notify("Vankim: failed to fetch deck names (Is Anki running with AnkiConnect?)", vim.log.levels.ERROR)
+      return {} 
+    end
     return format_deck_matches(res)
   else
     return {}
