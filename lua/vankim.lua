@@ -546,6 +546,8 @@ local function parse_current_buffer()
   local latex_input = tmp .. ".tex"
   local output = tmp .. ".svg"
 
+  local err = false
+
   while i <= #lines do
     local l = lines[i]
     local fname, rest = l:match("^%s*([^:]+):%s*(.*)$")
@@ -570,6 +572,7 @@ local function parse_current_buffer()
           )
           local error = vim.fn.system({ "typst", "compile", typst_input, output })
           if vim.v.shell_error ~= 0 then
+            err = true
             vim.notify("Vankim: Typst compilation failed" .. "\n" .. error, vim.log.levels.ERROR)
           end
 
@@ -587,7 +590,8 @@ local function parse_current_buffer()
             },
           })
           if not res then
-            error("Failed to store typst media: " .. tostring(err))
+            err = true
+            vim.notify("Vankim: Failed to store typst media: " .. tostring(err), vim.log.levels.ERROR)
           end
           return '<img src="' .. filename .. '">'
         end)
@@ -597,10 +601,15 @@ local function parse_current_buffer()
             vim.split(latex_preamble .. "\n" .. match .. "\n" .. latex_ending, "\n"),
             latex_input
           )
-          vim.fn.system({ "latex", "-interactions=nonstopmode", "-halt-on-error", "-output-directory=/tmp", latex_input})
-          vim.fn.system({ "dvisvgm", "--no-fonts", "-n", "-o", output, tmp .. ".dvi"})
+          local latex_error = vim.fn.system({ "latex", "-interactions=nonstopmode", "-halt-on-error", "-output-directory=/tmp", latex_input})
           if vim.v.shell_error ~= 0 then
-            error("Latex compilation failed")
+            err = true
+            vim.notify("Vankim: Latex compilation failed" .. "\n" .. latex_error, vim.log.levels.ERROR)
+          end
+          local dvi_error = vim.fn.system({ "dvisvgm", "--no-fonts", "-n", "-o", output, tmp .. ".dvi"})
+          if vim.v.shell_error ~= 0 then
+            err = true
+            vim.notify("Vankim: DVI to SVG conversion failed" .. "\n" .. dvi_error, vim.log.levels.ERROR)
           end
 
           local data = vim.fn.readfile(output, "b")
@@ -617,7 +626,8 @@ local function parse_current_buffer()
             },
           })
           if not res then
-            error("Failed to store latex media: " .. tostring(err))
+            err = true
+            vim.notify("Vankim: Failed to store latex media: " .. tostring(err), vim.log.levels.ERROR)
           end
           return '<img src="' .. filename .. '">'
         end)
@@ -627,7 +637,7 @@ local function parse_current_buffer()
     end
   end
 
-  return { model = model, deck = deck, fields = fields }
+  return err, { model = model, deck = deck, fields = fields }
 end
 
 
@@ -748,7 +758,7 @@ function M.AnkiSend(arg)
   local reset = false
   if arg and arg.args == "true" then reset = true end
 
-  local parsed = parse_current_buffer()
+  local err, parsed = parse_current_buffer()
   if not parsed.model then
     vim.notify("Anki: Model not set in buffer (line 'Model : ...')", vim.log.levels.ERROR)
     return
@@ -757,6 +767,7 @@ function M.AnkiSend(arg)
     vim.notify("Anki: Deck not set in buffer (line 'Deck: ...')", vim.log.levels.ERROR)
     return
   end
+  if err then return end
 
   -- Build the addNote payload
   local note = {
