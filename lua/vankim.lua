@@ -13,6 +13,8 @@ local M = {}
 M.url = "http://127.0.0.1:8765"
 M.api_version = 5
 M.bufname_prefix = "Vankim:"
+M.tex_tags = { open = "[latex]", close = "[/latex]" }
+M.typst_tags = { open = "[typst]", close = "[/typst]" }
 
 -- Helper
 -- Parse command arg to appropriate shape (table of strings)
@@ -200,6 +202,265 @@ local function update_highlights(buf)
 end
 
 --------------------------------------------------------------------------------
+-- AnkiConnect interactions ----------------------------------------------------
+--------------------------------------------------------------------------------
+
+-- Helpers to store last-used model/deck in vim.g
+local function set_last(model, deck)
+  if model then vim.g.anki_last_model = model end
+  if deck  then vim.g.anki_last_deck  = deck  end
+end
+
+local function get_last()
+  return vim.g.anki_last_model, vim.g.anki_last_deck
+end
+
+-- Handle AnkiConnect requests
+local function ankiconnect_request(payload)
+  local json = vim.fn.json_encode(payload)
+  local cmd = { "curl", "-s", "-X", "POST", "-H", "Content-Type: application/json", "-d", json, M.url }
+  local ok_res = vim.fn.system(cmd)
+  if ok_res == nil or ok_res == '' then
+    return nil, "empty response (is Anki running with AnkiConnect?)"
+  end
+  local ok, decoded = pcall(vim.fn.json_decode, ok_res)
+  if not ok then
+    return nil, "failed to parse JSON response: " .. tostring(decoded)
+  end
+  if decoded.error ~= vim.NIL and decoded.error ~= nil then
+    return nil, decoded.error
+  end
+  return decoded.result, nil
+end
+
+-- Fetch model field names
+local function get_model_fields(model_name)
+  local payload = { action = "modelFieldNames", version = M.api_version, params = { modelName = model_name } }
+  return ankiconnect_request(payload)
+end
+
+--------------------------------------------------------------------------------
+-- Typst & Latex ---------------------------------------------------------------
+--------------------------------------------------------------------------------
+
+local function sanitize_filename(name)
+  return (name or ""):gsub("%s+", "_"):gsub("[^%w_-]", "")
+end
+
+local function save_preamble_remote(type, name, text)
+  local safe = sanitize_filename(name):lower()
+  local filename = ("_anki_preamble_%s_%s.txt"):format(type, safe)
+  local b64 = vim.fn.systemlist({"base64", "--wrap=0"}, text)[1]
+  local payload = {
+    action = "storeMediaFile",
+    version = M.api_version,
+    params = {
+      filename = filename,
+      data = b64
+    }
+  }
+  local res, err = ankiconnect_request(payload)
+  if not res then return nil, err end
+  return filename
+end
+
+local function load_preamble_remote(type, name)
+  local safe = sanitize_filename(name):lower()
+  local filename = ("_anki_preamble_%s_%s.txt"):format(type, safe)
+  local payload = {
+    action = "retrieveMediaFile",
+    version = M.api_version,
+    params = {
+      filename = filename
+    }
+  }
+  local res, err = ankiconnect_request(payload)
+  if not res then return nil, err end
+  local decoded = vim.fn.systemlist({"base64", "--decode"}, res)
+  return table.concat(decoded, "\n")
+end
+
+local function save_preamble_local(type, name, text)
+  local safe = sanitize_filename(name):lower()
+  local filename = ("_anki_preamble_%s_%s.txt"):format(type, safe)
+  local filepath = vim.fn.stdpath("cache") .. "/" .. filename
+  local ok, res = pcall(vim.fn.writefile, vim.split(text, "\n"), filepath)
+  if not ok then return nil, "Failed to write preamble file: " .. tostring(res) end
+  return filepath
+end
+
+local function load_preamble_local(type, name)
+  local safe = sanitize_filename(name):lower()
+  local filename = ("_anki_preamble_%s_%s.txt"):format(type, safe)
+  local filepath = vim.fn.stdpath("cache") .. "/" .. filename
+  if vim.fn.filereadable(filepath) == 0 then
+    return nil, "Preamble file not found: " .. filepath
+  end
+  return table.concat(vim.fn.readfile(filepath), "\n")
+end
+
+local function load_preamble(type, name)
+  local text, err = load_preamble_local(type, name)
+  if text then return text end
+  text, err = load_preamble_remote(type, name)
+  if text then save_preamble_local(type, name, text); return text end
+end
+
+local function save_preamble(type, name, text)
+  local filepath, err = save_preamble_local(type, name, text)
+  if filepath then
+    local remote_path, rerr = save_preamble_remote(type, name, text)
+    if not remote_path then
+      vim.notify("Vankim: failed to save remote preamble: " .. tostring(rerr), vim.log.levels.WARN)
+      return
+    end
+    local safe = sanitize_filename(name):lower()
+    local filename = ("_anki_preamble_%s_%s.txt"):format(type, safe)
+    local anki_preambles, err = ankiconnect_request({
+      action = "retrieveMediaFile",
+      version = M.api_version,
+      params = {
+        filename = "_anki_preamble_list.txt"
+      }
+    })
+    anki_preambles = vim.fn.systemlist({"base64", "--decode"}, anki_preambles) or ""
+    local need_to_save = false
+    if not anki_preambles then anki_preambles = filename; need_to_save = true
+    elseif anki_preambles:find(filename) == nil then 
+      anki_preambles = anki_preambles .. "\n" .. filename; need_to_save = true end
+    if need_to_save then 
+      local b64 = vim.fn.systemlist({"base64", "--wrap=0"}, anki_preambles)[1]
+      local ok, err = ankiconnect_request({
+        action = "storeMediaFile",
+        version = M.api_version,
+        params = {
+          filename = "_anki_preamble_list.txt",
+          data = b64
+        }
+      })
+      if not ok then vim.notify("Vankim: failed to update preamble list: " .. tostring(err), vim.log.levels.WARN) end
+    end
+  else
+    vim.notify("Vankim: failed to save local preamble: " .. tostring(err), vim.log.levels.ERROR)
+  end
+end
+
+local function delete_preamble(typ, name)
+  local safe = sanitize_filename(name):lower()
+  local filename = ("_anki_preamble_%s_%s.txt"):format(typ, safe)
+  local payload = {
+    action = "deleteMediaFile",
+    version = M.api_version,
+    params = {
+      filename = filename
+    }
+  }
+  local res, err = ankiconnect_request(payload)
+  if not res then return false, err end
+  local filepath = vim.fn.stdpath("cache") .. "/" .. filename
+  if vim.fn.filereadable(filepath) then
+    local ok, err = pcall(vim.fn.delete, filepath)
+    if not ok then return false, "Failed to delete local preamble file: " .. tostring(err) end
+  end
+  local preamble_list, err = ankiconnect_request({
+    action = "retrieveMediaFile",
+    version = M.api_version,
+    params = {
+      filename = "_anki_preamble_list.txt"
+    }
+  })
+  if not preamble_list then return false, err end
+  preamble_list = vim.fn.systemlist({"base64", "--decode"}, preamble_list) or {}
+  local new_list = {}
+  for _, line in ipairs(preamble_list) do
+    if line:match(filename) == nil then table.insert(new_list, line) end
+  end
+  local b64 = vim.fn.systemlist({"base64", "--wrap=0"}, table.concat(new_list, "\n"))[1]
+  local ok, err = ankiconnect_request({
+    action = "storeMediaFile",
+    version = M.api_version,
+    params = {
+      filename = "_anki_preamble_list.txt",
+      data = b64
+    }
+  })
+  if not ok then return false, "Failed to update preamble list: " .. tostring(err) end
+  return true
+end
+
+local function save_ending_remote(type, name, text)
+  local safe = sanitize_filename(name):lower()
+  local filename = ("_anki_ending_%s_%s.txt"):format(type, safe)
+  local b64 = vim.fn.systemlist({"base64", "--wrap=0"}, text)[1]
+  local payload = {
+    action = "storeMediaFile",
+    version = M.api_version,
+    params = {
+      filename = filename,
+      data = b64
+    }
+  }
+  local res, err = ankiconnect_request(payload)
+  if not res then return nil, err end
+  return filename
+end
+
+local function load_ending_remote(type, name)
+  local safe = sanitize_filename(name):lower()
+  local filename = ("_anki_ending_%s_%s.txt"):format(type, safe)
+  local payload = {
+    action = "retrieveMediaFile",
+    version = M.api_version,
+    params = {
+      filename = filename
+    }
+  }
+  local res, err = ankiconnect_request(payload)
+  if not res then return nil, err end
+  local decoded = vim.fn.systemlist({"base64", "--decode"}, res)
+  return table.concat(decoded, "\n")
+end
+
+local function save_ending_local(type, name, text)
+  local safe = sanitize_filename(name):lower()
+  local filename = ("_anki_ending_%s_%s.txt"):format(type, safe)
+  local filepath = vim.fn.stdpath("cache") .. "/" .. filename
+  local ok, res = pcall(vim.fn.writefile, vim.split(text, "\n"), filepath)
+  if not ok then return nil, "Failed to write ending file: " .. tostring(res) end
+  return filepath
+end
+
+local function load_ending_local(type, name)
+  local safe = sanitize_filename(name):lower()
+  local filename = ("_anki_ending_%s_%s.txt"):format(type, safe)
+  local filepath = vim.fn.stdpath("cache") .. "/" .. filename
+  if vim.fn.filereadable(filepath) == 0 then
+    return nil, "Ending file not found: " .. filepath
+  end
+  return table.concat(vim.fn.readfile(filepath), "\n")
+end
+
+local function load_ending(type, name)
+  local text, err = load_ending_local(type, name)
+  if text then return text end
+  text, err = load_ending_remote(type, name)
+  if text then save_ending_local(type, name, text); return text end
+end
+
+local function save_ending(type, name, text)
+  local filepath, err = save_ending_local(type, name, text)
+  if filepath then
+    local remote_path, rerr = save_ending_remote(type, name, text)
+    if not remote_path then
+      vim.notify("Vankim: failed to save remote ending : " .. tostring(rerr), vim.log.levels.WARN)
+    end
+    return filepath
+  else
+    vim.notify("Vankim: failed to save local ending : " .. tostring(err), vim.log.levels.ERROR)
+  end
+end
+
+--------------------------------------------------------------------------------
 -- Buffer management -----------------------------------------------------------
 --------------------------------------------------------------------------------
 
@@ -242,7 +503,7 @@ local function open_card_buffer(model, deck, fields)
     -- Reuse current buffer if it already is an Anki buffer
     buf = curbuf
   else
-    buf = vim.api.nvim_create_buf(false, true) -- listed=false, scratch=true
+    buf = vim.api.nvim_create_buf(true, true) -- listed=false, scratch=true
     vim.api.nvim_buf_set_name(buf, M.bufname_prefix .. (model or "untitled"))
   end
 
@@ -275,6 +536,16 @@ local function parse_current_buffer()
     i = i + 1
   end
 
+  local typst_preamble = load_preamble("typst", model) or ""
+  local typst_ending = load_ending("typst", model) or ""
+  local latex_preamble = load_preamble("latex", model) or ""
+  local latex_ending = load_ending("latex", model) or ""
+  local tmp = vim.fn.tempname()
+
+  local typst_input = tmp .. ".typ"
+  local latex_input = tmp .. ".tex"
+  local output = tmp .. ".svg"
+
   while i <= #lines do
     local l = lines[i]
     local fname, rest = l:match("^%s*([^:]+):%s*(.*)$")
@@ -290,7 +561,67 @@ local function parse_current_buffer()
         table.insert(value_lines, nxt)
         i = i + 1
       end
-      fields[fname] = table.concat(value_lines, "\n")
+      local field_value = table.concat(value_lines, "\n")
+      field_value = field_value:gsub(vim.pesc(M.typst_tags.open) .. "%s*(.*)%s*" .. vim.pesc(M.typst_tags.close), 
+        function(match)
+          vim.fn.writefile(
+            vim.split(typst_preamble .. "\n" .. match .. "\n" .. typst_ending, "\n"),
+            typst_input
+          )
+          local error = vim.fn.system({ "typst", "compile", typst_input, output })
+          if vim.v.shell_error ~= 0 then
+            vim.notify("Vankim: Typst compilation failed" .. "\n" .. error, vim.log.levels.ERROR)
+          end
+
+          local data = vim.fn.readfile(output, "b")
+          local b64 = vim.fn.system("base64", data)
+
+          local filename = "typst-" .. vim.fn.fnamemodify(tmp, ":t") .. ".svg"
+
+          local res, err = ankiconnect_request({
+            action = "storeMediaFile",
+            version = M.api_version,
+            params = {
+              filename = filename,
+              data = b64
+            },
+          })
+          if not res then
+            error("Failed to store typst media: " .. tostring(err))
+          end
+          return '<img src="' .. filename .. '">'
+        end)
+      field_value = field_value:gsub(vim.pesc(M.tex_tags.open) .. "%s*(.*)%s*" .. vim.pesc(M.tex_tags.close), 
+        function(match)
+          vim.fn.writefile(
+            vim.split(latex_preamble .. "\n" .. match .. "\n" .. latex_ending, "\n"),
+            latex_input
+          )
+          vim.fn.system({ "latex", "-interactions=nonstopmode", "-halt-on-error", "-output-directory=/tmp", latex_input})
+          vim.fn.system({ "dvisvgm", "--no-fonts", "-n", "-o", output, tmp .. ".dvi"})
+          if vim.v.shell_error ~= 0 then
+            error("Latex compilation failed")
+          end
+
+          local data = vim.fn.readfile(output, "b")
+          local b64 = vim.fn.system("base64", data)
+
+          local filename = "latex-" .. vim.fn.fnamemodify(tmp, ":t") .. ".svg"
+
+          local res, err = ankiconnect_request({
+            action = "storeMediaFile",
+            version = M.api_version,
+            params = {
+              filename = filename,
+              data = b64
+            },
+          })
+          if not res then
+            error("Failed to store latex media: " .. tostring(err))
+          end
+          return '<img src="' .. filename .. '">'
+        end)
+      fields[fname] = field_value
     else
       i = i + 1
     end
@@ -299,42 +630,59 @@ local function parse_current_buffer()
   return { model = model, deck = deck, fields = fields }
 end
 
+
 --------------------------------------------------------------------------------
--- AnkiConnect interactions ----------------------------------------------------
+-- Telescope helpers -----------------------------------------------------------
 --------------------------------------------------------------------------------
 
--- Helpers to store last-used model/deck in vim.g
-local function set_last(model, deck)
-  if model then vim.g.anki_last_model = model end
-  if deck  then vim.g.anki_last_deck  = deck  end
+local pickers = require("telescope.pickers")
+local finders = require("telescope.finders")
+local conf = require("telescope.config").values
+local actions = require("telescope.actions")
+local action_state = require("telescope.actions.state")
+
+local function telescope_select(items, opts, on_choice)
+  pickers.new(opts or {}, {
+    prompt_title = opts and opts.prompt or "Select",
+    finder = finders.new_table({ results = items }),
+    sorter = conf.generic_sorter(opts or {}),
+    attach_mappings = function(bufnr, map)
+      actions.select_default:replace(function()
+        actions.close(bufnr)
+        local entry = action_state.get_selected_entry()
+        if entry then on_choice(entry[1]) end
+      end)
+      return true
+    end,
+  }):find()
 end
 
-local function get_last()
-  return vim.g.anki_last_model, vim.g.anki_last_deck
-end
-
--- Handle AnkiConnect requests
-local function ankiconnect_request(payload)
-  local json = vim.fn.json_encode(payload)
-  local cmd = { "curl", "-s", "-X", "POST", "-H", "Content-Type: application/json", "-d", json, M.url }
-  local ok_res = vim.fn.system(cmd)
-  if ok_res == nil or ok_res == '' then
-    return nil, "empty response (is Anki running with AnkiConnect?)"
-  end
-  local ok, decoded = pcall(vim.fn.json_decode, ok_res)
-  if not ok then
-    return nil, "failed to parse JSON response: " .. tostring(decoded)
-  end
-  if decoded.error ~= vim.NIL and decoded.error ~= nil then
-    return nil, decoded.error
-  end
-  return decoded.result, nil
-end
-
--- Fetch model field names
-local function get_model_fields(model_name)
-  local payload = { action = "modelFieldNames", version = M.api_version, params = { modelName = model_name } }
-  return ankiconnect_request(payload)
+local function telescope_input(opts, on_confirm)
+  opts = opts or {}
+  pickers.new(opts, {
+    prompt_title = opts.prompt or "Input",
+    finder = finders.new_table({ results = {} }),
+    sorter = conf.generic_sorter(opts),
+    previewer = false,
+    layout_strategy = "center",
+    layout_config = {
+      width = opts.width or 0.5,
+      height = opts.height or 0,
+      prompt_position = "top",
+    },
+    attach_mappings = function(bufnr, map)
+      actions.select_default:replace(function()
+        local prompt = action_state.get_current_line()
+        actions.close(bufnr)
+        if prompt and prompt ~= "" then
+          on_confirm(prompt)
+        else
+          on_confirm(nil)
+        end
+      end)
+      return true
+    end,
+  }):find()
 end
 
 --------------------------------------------------------------------------------
@@ -353,6 +701,7 @@ function M.AnkiNew(opts)
   model = model or last_model or ""
   deck = deck or last_deck or ""
 
+  -- Doesn't work need to be fixed later
   local mode = vim.fn.mode()
   local sel_text = nil
   if mode == "v" then
@@ -623,6 +972,237 @@ function M.AnkiModel()
   }):find()
 end
 
+function M.AnkiPreambleAdd(args)
+  local args = parse_arg(args)
+  local typ = args[1] and args[1]:lower() or nil
+  if typ and typ ~= "latex" and typ ~= "typst" then typ = nil end
+
+  local function ask_type(cb)
+    vim.ui.select({ "latex", "typst" }, { prompt = "Preamble type:" }, cb)
+  end
+
+  local function ask_name(cb)
+    vim.ui.input({ prompt = "Preamble name: " }, cb)
+  end
+
+  local function open_editor_for(typ, name)
+    if not typ or typ == "" then
+      vim.notify("Vankim: preamble type not specified", vim.log.levels.ERROR); return
+    end
+    if not name or name == "" then
+      vim.notify("Vankim: preamble name not specified", vim.log.levels.ERROR); return
+    end
+
+    local buf = vim.api.nvim_create_buf(true, true)
+    local safe_name = sanitize_filename(name)
+    local bufname = ("AnkiPreamble:%s:%s"):format(typ, safe_name)
+    vim.api.nvim_buf_set_name(buf, bufname)
+
+    if typ == "typst" then
+      pcall(vim.api.nvim_buf_set_option, buf, "filetype", "typst")
+    else
+      pcall(vim.api.nvim_buf_set_option, buf, "filetype", "tex")
+    end
+
+    local existing_text, err = load_preamble(typ, name)
+    if existing_text then
+      local lines = vim.split(existing_text, "\n")
+      vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+    end
+
+    local win = vim.api.nvim_get_current_win()
+    vim.api.nvim_win_set_buf(win, buf)
+
+    local augroup = vim.api.nvim_create_augroup("AnkiPreambleSave_" .. buf, { clear = true })
+    vim.api.nvim_create_autocmd("BufUnload", {
+      group = augroup,
+      buffer = buf,
+      callback = function()
+        local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+        local text = table.concat(lines, "\n")
+        pcall(save_preamble, typ, name, text)
+      end,
+    })
+  end
+
+  if not typ then
+    ask_type(function(choice)
+      if not choice then
+        vim.notify("Vankim: preamble type not specified", vim.log.levels.ERROR); return
+      end
+      ask_name(function(name)
+        if not name or name == "" then
+          vim.notify("Vankim: preamble name not specified", vim.log.levels.ERROR); return
+        end
+        open_editor_for(choice, name)
+      end)
+    end)
+  else
+    local provided_name = args[2]
+    if provided_name and provided_name ~= "" then
+      open_editor_for(typ, provided_name)
+    else
+      ask_name(function(name)
+        if not name or name == "" then
+          vim.notify("Vankim: preamble name not specified", vim.log.levels.ERROR); return
+        end
+        open_editor_for(typ, name)
+      end)
+    end
+  end
+end
+
+function M.AnkiEndingAdd(args)
+  local args = parse_arg(args)
+  local typ = args[1] and args[1]:lower() or nil
+  if typ and typ ~= "latex" and typ ~= "typst" then typ = nil end
+
+  local function ask_type(cb)
+    vim.ui.select({ "latex", "typst" }, { prompt = "Ending type:" }, cb)
+  end
+
+  local function ask_name(cb)
+    vim.ui.input({ prompt = "Ending name: " }, cb)
+  end
+
+  local function open_editor_for(typ, name)
+    if not typ or typ == "" then
+      vim.notify("Vankim: ending type not specified", vim.log.levels.ERROR); return
+    end
+    if not name or name == "" then
+      vim.notify("Vankim: ending name not specified", vim.log.levels.ERROR); return
+    end
+
+    local buf = vim.api.nvim_create_buf(true, true)
+    local safe_name = sanitize_filename(name)
+    local bufname = ("AnkiEnding:%s:%s"):format(typ, safe_name)
+    vim.api.nvim_buf_set_name(buf, bufname)
+
+    if typ == "typst" then
+      pcall(vim.api.nvim_buf_set_option, buf, "filetype", "typst")
+    else
+      pcall(vim.api.nvim_buf_set_option, buf, "filetype", "tex")
+    end
+
+    local existing_text, err = load_ending(typ, name)
+    if existing_text then
+      local lines = vim.split(existing_text, "\n")
+      vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+    end
+
+    local win = vim.api.nvim_get_current_win()
+    vim.api.nvim_win_set_buf(win, buf)
+
+    local augroup = vim.api.nvim_create_augroup("AnkiEndingSave_" .. buf, { clear = true })
+    vim.api.nvim_create_autocmd("BufWritePost", {
+      group = augroup,
+      buffer = buf,
+      callback = function()
+        local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+        local text = table.concat(lines, "\n")
+        pcall(save_preamble, typ, name, text)
+      end,
+    })
+  end
+
+  if not typ then
+    ask_type(function(choice)
+      if not choice then
+        vim.notify("Vankim: ending type not specified", vim.log.levels.ERROR); return
+      end
+      ask_name(function(name)
+        if not name or name == "" then
+          vim.notify("Vankim: ending name not specified", vim.log.levels.ERROR); return
+        end
+        open_editor_for(choice, name)
+      end)
+    end)
+  else
+    local provided_name = args[2]
+    if provided_name and provided_name ~= "" then
+      open_editor_for(typ, provided_name)
+    else
+      ask_name(function(name)
+        if not name or name == "" then
+          vim.notify("Vankim: ending name not specified", vim.log.levels.ERROR); return
+        end
+        open_editor_for(typ, name)
+      end)
+    end
+  end
+end
+
+function M.AnkiPreamble()
+  local preamble_list, err = ankiconnect_request({
+    action = "retrieveMediaFile",
+    version = M.api_version,
+    params = {
+      filename = "_anki_preamble_list.txt"
+    }
+  })
+  preamble_list = vim.fn.systemlist({"base64", "--decode"}, preamble_list)
+  telescope_select(preamble_list or {}, { prompt = "Select preamble:" }, function(chosen)
+    if not chosen then M.AnkiPreambleAdd(); return end
+    local typ, name = chosen:match("^_anki_preamble_(%a+)_(.+)%.txt$")
+    if not typ or not name then
+      vim.notify("Vankim: invalid preamble name format: " .. tostring(chosen), vim.log.levels.ERROR)
+      return
+    end
+    local buf = vim.api.nvim_create_buf(true, true)
+    local bufname = ("AnkiPreamble:%s:%s"):format(typ, name)
+    vim.api.nvim_buf_set_name(buf, bufname)
+
+    if typ == "typst" then
+      pcall(vim.api.nvim_buf_set_option, buf, "filetype", "typst")
+    else
+      pcall(vim.api.nvim_buf_set_option, buf, "filetype", "tex")
+    end
+
+    local existing_text, err = load_preamble(typ, name)
+    if existing_text then
+      local lines = vim.split(existing_text, "\n")
+      vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+    end
+
+    local win = vim.api.nvim_get_current_win()
+    vim.api.nvim_win_set_buf(win, buf)
+
+    local augroup = vim.api.nvim_create_augroup("AnkiEndingSave_" .. buf, { clear = true })
+    vim.api.nvim_create_autocmd("BufWritePost", {
+      group = augroup,
+      buffer = buf,
+      callback = function()
+        local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+        local text = table.concat(lines, "\n")
+        pcall(save_preamble, typ, name, text)
+      end,
+    })
+  end)
+end
+
+function M.AnkiPreambleDelete()
+  local preamble_list, err = ankiconnect_request({
+    action = "retrieveMediaFile",
+    version = M.api_version,
+    params = {
+      filename = "_anki_preamble_list.txt"
+    }
+  })
+  preamble_list = vim.fn.systemlist({"base64", "--decode"}, preamble_list)
+  telescope_select(preamble_list or {}, { prompt = "Select preamble to delete:" }, function(chosen)
+    if not chosen then return end
+    local typ, name = chosen:match("^_anki_preamble_(%a+)_(.+)%.txt$")
+    if not typ or not name then
+      vim.notify("Vankim: invalid preamble name format: " .. tostring(chosen), vim.log.levels.ERROR)
+      return
+    end
+    local ok, err = delete_preamble(typ, name)
+    if not ok then
+      vim.notify("Vankim: failed to delete preamble: " .. tostring(err), vim.log.levels.ERROR)
+      return
+    end
+  end)
+end
 
 -- Setup: create user commands
 -- Completion for :AnkiNew that wraps suggestions in quotes but still filters on partial input.
@@ -811,6 +1391,22 @@ function M.setup()
 
   vim.api.nvim_create_user_command("AnkiModel",
     function() M.AnkiModel() end,
+    { nargs = 0 })
+
+  vim.api.nvim_create_user_command("AnkiPreambleAdd",
+    function(args) M.AnkiPreambleAdd(args.args) end,
+    { nargs = "*"})
+
+  vim.api.nvim_create_user_command("AnkiEndingAdd",
+    function(args) M.AnkiEndingAdd(args.args) end,
+    { nargs = "*" })
+
+  vim.api.nvim_create_user_command("AnkiPreamble",
+    M.AnkiPreamble,
+    { nargs = 0 })
+
+  vim.api.nvim_create_user_command("AnkiPreambleDelete",
+    M.AnkiPreambleDelete,
     { nargs = 0 })
 end
 
