@@ -540,11 +540,6 @@ local function parse_current_buffer()
   local typst_ending = load_ending("typst", model) or ""
   local latex_preamble = load_preamble("latex", model) or ""
   local latex_ending = load_ending("latex", model) or ""
-  local tmp = vim.fn.tempname()
-
-  local typst_input = tmp .. ".typ"
-  local latex_input = tmp .. ".tex"
-  local output = tmp .. ".svg"
 
   local err = false
 
@@ -566,6 +561,11 @@ local function parse_current_buffer()
       local field_value = table.concat(value_lines, "\n")
       field_value = field_value:gsub(vim.pesc(M.typst_tags.open) .. "%s*(.*)%s*" .. vim.pesc(M.typst_tags.close), 
         function(match)
+          local tmp = vim.fn.tempname()
+
+          local typst_input = tmp .. ".typ"
+          local latex_input = tmp .. ".tex"
+          local output = tmp .. ".svg"
           vim.fn.writefile(
             vim.split(typst_preamble .. "\n" .. match .. "\n" .. typst_ending, "\n"),
             typst_input
@@ -597,6 +597,11 @@ local function parse_current_buffer()
         end)
       field_value = field_value:gsub(vim.pesc(M.latex_tags.open) .. "%s*(.*)%s*" .. vim.pesc(M.latex_tags.close), 
         function(match)
+          local tmp = vim.fn.tempname()
+
+          local typst_input = tmp .. ".typ"
+          local latex_input = tmp .. ".tex"
+          local output = tmp .. ".svg"
           vim.fn.writefile(
             vim.split(latex_preamble .. "\n" .. match .. "\n" .. latex_ending, "\n"),
             latex_input
