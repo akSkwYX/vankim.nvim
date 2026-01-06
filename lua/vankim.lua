@@ -926,7 +926,7 @@ function M.AnkiModel()
 
         -- parse current buffer content
         local buf = vim.api.nvim_get_current_buf()
-        local parsed = parse_current_buffer()
+        local _, parsed = parse_current_buffer()
         local old_fields_map = parsed.fields or {}
         -- get names in order from current buffer using positions
         local old_pos = get_field_positions(buf)
