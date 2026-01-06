@@ -13,7 +13,7 @@ local M = {}
 M.url = "http://127.0.0.1:8765"
 M.api_version = 5
 M.bufname_prefix = "Vankim:"
-M.tex_tags = { open = "[latex]", close = "[/latex]" }
+M.latex_tags = { open = "[latex]", close = "[/latex]" }
 M.typst_tags = { open = "[typst]", close = "[/typst]" }
 
 -- Helper
@@ -1372,7 +1372,11 @@ local function anki_move_to_field_complete(arg_lead, cmd_line, cursor_pos)
   end
 end
 
-function M.setup()
+function M.setup(opts)
+  for k,v in pairs(opts or {}) do
+    M[k] = v
+  end
+
   vim.api.nvim_create_user_command("AnkiNew",
     function(opts) M.AnkiNew(opts.fargs) end,
     { nargs = "*", range = true, complete = anki_new_complete })
@@ -1409,8 +1413,5 @@ function M.setup()
     M.AnkiPreambleDelete,
     { nargs = 0 })
 end
-
--- Auto-setup on require() (optional)
-M.setup()
 
 return M
