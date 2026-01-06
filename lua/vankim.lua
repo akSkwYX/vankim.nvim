@@ -1094,7 +1094,7 @@ function M.AnkiEndingAdd(args)
     vim.api.nvim_win_set_buf(win, buf)
 
     local augroup = vim.api.nvim_create_augroup("AnkiEndingSave_" .. buf, { clear = true })
-    vim.api.nvim_create_autocmd("BufWritePost", {
+    vim.api.nvim_create_autocmd("BufUnload", {
       group = augroup,
       buffer = buf,
       callback = function()
@@ -1168,7 +1168,7 @@ function M.AnkiPreamble()
     vim.api.nvim_win_set_buf(win, buf)
 
     local augroup = vim.api.nvim_create_augroup("AnkiEndingSave_" .. buf, { clear = true })
-    vim.api.nvim_create_autocmd("BufWritePost", {
+    vim.api.nvim_create_autocmd("BufUnload", {
       group = augroup,
       buffer = buf,
       callback = function()
