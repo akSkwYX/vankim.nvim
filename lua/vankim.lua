@@ -591,7 +591,7 @@ local function parse_current_buffer()
           end
           return '<img src="' .. filename .. '">'
         end)
-      field_value = field_value:gsub(vim.pesc(M.tex_tags.open) .. "%s*(.*)%s*" .. vim.pesc(M.tex_tags.close), 
+      field_value = field_value:gsub(vim.pesc(M.latex_tags.open) .. "%s*(.*)%s*" .. vim.pesc(M.latex_tags.close), 
         function(match)
           vim.fn.writefile(
             vim.split(latex_preamble .. "\n" .. match .. "\n" .. latex_ending, "\n"),
