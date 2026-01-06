@@ -581,7 +581,7 @@ local function parse_current_buffer()
 
           local filename = "typst-" .. vim.fn.fnamemodify(tmp, ":t") .. ".svg"
 
-          local res, err = ankiconnect_request({
+          local res, error = ankiconnect_request({
             action = "storeMediaFile",
             version = M.api_version,
             params = {
@@ -591,7 +591,7 @@ local function parse_current_buffer()
           })
           if not res then
             err = true
-            vim.notify("Vankim: Failed to store typst media: " .. tostring(err), vim.log.levels.ERROR)
+            vim.notify("Vankim: Failed to store typst media: " .. tostring(error), vim.log.levels.ERROR)
           end
           return '<img src="' .. filename .. '">'
         end)
