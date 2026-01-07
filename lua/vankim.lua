@@ -223,8 +223,11 @@ local function ankiconnect_request(payload)
   if ok_res == false then
     return nil, "Error in ankiconnect request"
   end
-  if ok_res == nil then
+  if ok_res == nil and payload.action == "storeMediaFile" then
     return true, nil
+  end
+  if not ok_res then
+    return nil, "Ankiconnect error : empty reponse"
   end
   local ok, decoded = pcall(vim.fn.json_decode, ok_res)
   if not ok then
