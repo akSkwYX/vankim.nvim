@@ -223,7 +223,7 @@ local function ankiconnect_request(payload)
   if ok_res == false then
     return nil, "Error in ankiconnect request"
   end
-  if not ok_res then
+  if ok_res == nil then
     return true, nil
   end
   local ok, decoded = pcall(vim.fn.json_decode, ok_res)
