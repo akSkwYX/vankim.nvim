@@ -11,7 +11,7 @@ local M = {}
 
 -- Configuration
 M.url = "http://127.0.0.1:8765"
-M.api_version = 5
+M.api_version = 6
 M.bufname_prefix = "Vankim:"
 M.latex_tags = { open = "[latex]", close = "[/latex]" }
 M.typst_tags = { open = "[typst]", close = "[/typst]" }
@@ -220,8 +220,11 @@ local function ankiconnect_request(payload)
   local json = vim.fn.json_encode(payload)
   local cmd = { "curl", "-s", "-X", "POST", "-H", "Content-Type: application/json", "-d", json, M.url }
   local ok_res = vim.fn.system(cmd)
-  if ok_res == nil or ok_res == '' then
-    return nil, "empty response (is Anki running with AnkiConnect?)"
+  if ok_res == false then
+    return nil, "Error in ankiconnect request"
+  end
+  if not ok_res then
+    return true, nil
   end
   local ok, decoded = pcall(vim.fn.json_decode, ok_res)
   if not ok then
