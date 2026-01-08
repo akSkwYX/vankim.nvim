@@ -109,11 +109,8 @@ local function set_fields_names(names)
   end
 end
 local function is_a_field(name)
-  if name:sub(#name, #name) == ":" then
-    name = name:sub(1, #name-1)
-  end
   while name:sub(1,1) == " " do name = name:sub(2,#name) end
-  while name:sub(#name,#name) == " " do name = name:sub(1,#name-1) end
+  while name:sub(#name,#name) == " " or name:sub(#name,#name) == ":" do name = name:sub(1,#name-1) end
   return Fields_names[name] ~= nil
 end
 
@@ -226,8 +223,8 @@ local function ankiconnect_request(payload)
   if ok_res == nil and payload.action == "storeMediaFile" then
     return true, nil
   end
-  if not ok_res then
-    return nil, "Ankiconnect error : empty reponse"
+  if not ok_res or ok_res == "" then
+    return nil, "Ankiconnect : empty reponse"
   end
   local ok, decoded = pcall(vim.fn.json_decode, ok_res)
   if not ok then
@@ -567,25 +564,25 @@ local function parse_current_buffer()
       local field_value = table.concat(value_lines, "\n")
       field_value = field_value:gsub(vim.pesc(M.typst_tags.open) .. "%s*(.*)%s*" .. vim.pesc(M.typst_tags.close), 
         function(match)
-          local tmp = vim.fn.tempname()
+          local filename = "typst-" .. vim.fn.sha256(typst_preamble .. "\n" .. match .. "\n" .. typst_ending)
+          local tmp = vim.fn.stdpath("cache") .. "/"
 
-          local typst_input = tmp .. ".typ"
-          local latex_input = tmp .. ".tex"
-          local output = tmp .. ".svg"
+          local input = filename .. ".typ"
+          local output = filename .. ".svg"
+
           vim.fn.writefile(
             vim.split(typst_preamble .. "\n" .. match .. "\n" .. typst_ending, "\n"),
-            typst_input
+            tmp .. input
           )
-          local error = vim.fn.system({ "typst", "compile", typst_input, output })
+          local error = vim.fn.system({ "typst", "compile", tmp .. input, tmp .. output })
           if vim.v.shell_error ~= 0 then
             err = true
             vim.notify("Vankim: Typst compilation failed" .. "\n" .. error, vim.log.levels.ERROR)
           end
 
-          local data = vim.fn.readfile(output, "b")
+          local data = vim.fn.readfile(tmp .. output, "b")
           local b64 = vim.fn.system("base64", data)
 
-          local filename = "typst-" .. vim.fn.fnamemodify(tmp, ":t") .. ".svg"
 
           local res, error = ankiconnect_request({
             action = "storeMediaFile",
