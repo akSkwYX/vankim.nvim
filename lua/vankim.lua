@@ -215,7 +215,13 @@ end
 -- Handle AnkiConnect requests
 local function ankiconnect_request(payload)
   local json = vim.fn.json_encode(payload)
-  local cmd = { "curl", "-s", "-X", "POST", "-H", "Content-Type: application/json", "-d", json, M.url }
+  local tmp = vim.fn.tempname()
+  local ok_write, write_err = pcall(vim.fn.writefile, { json }, tmp)
+  if not ok_write then
+    return nil, "failed to write temp payload: " .. tostring(write_err)
+  end
+  
+  local cmd = { "curl", "-s", "-X", "POST", "-H", "Content-Type: application/json", "-d", "@" .. tmp, M.url }
   local ok_res = vim.fn.system(cmd)
   if not ok_res or ok_res == "" then
     return nil, "failed to get response from AnkiConnect"
@@ -558,25 +564,30 @@ local function parse_current_buffer()
       local field_value = table.concat(value_lines, "\n")
       field_value = field_value:gsub(vim.pesc(M.typst_tags.open) .. "%s*(.*)%s*" .. vim.pesc(M.typst_tags.close), 
         function(match)
-          local filename = "typst-" .. vim.fn.sha256(typst_preamble .. "\n" .. match .. "\n" .. typst_ending)
-          local tmp = vim.fn.stdpath("cache") .. "/"
+          local filename = "typst-" .. vim.fn.sha256(typst_preamble .. "\n" .. match .. "\n" .. typst_ending) .. ".svg"
+          local tmp = vim.fn.tempname()
 
-          local input = filename .. ".typ"
-          local output = filename .. ".svg"
+          local input = tmp .. ".typ"
+          local output = tmp .. ".svg"
+          local b64_output = tmp .. ".b64"
 
           vim.fn.writefile(
             vim.split(typst_preamble .. "\n" .. match .. "\n" .. typst_ending, "\n"),
-            tmp .. input
+            input
           )
-          local error = vim.fn.system({ "typst", "compile", tmp .. input, tmp .. output })
+          local error = vim.fn.system({ "typst", "compile", input, output })
           if vim.v.shell_error ~= 0 then
             err = true
             vim.notify("Vankim: Typst compilation failed" .. "\n" .. error, vim.log.levels.ERROR)
           end
 
-          local data = vim.fn.readfile(tmp .. output, "b")
+          if err then return match end
+          local data = vim.fn.readfile(output, "b")
           local b64 = vim.fn.system("base64", data)
-
+          vim.fn.writefile(
+            { b64 },
+            b64_output
+          )
 
           local res, error = ankiconnect_request({
             action = "storeMediaFile",
@@ -776,12 +787,11 @@ function M.AnkiSend(arg)
     deckName = parsed.deck,
     modelName = parsed.model,
     fields = parsed.fields,
-    tags = {}  -- could parse tags from buffer later
   }
   local payload = { action = "addNote", version = M.api_version, params = { note = note } }
   local res, err = ankiconnect_request(payload)
   if not res then
-    vim.notify("Anki: addNote failed: "..tostring(err), vim.log.levels.ERROR)
+    vim.notify("Vankim: addNote failed: "..tostring(err), vim.log.levels.ERROR)
     return
   end
   set_last(parsed.model, parsed.deck)
@@ -1336,16 +1346,16 @@ local function anki_new_complete(arg_lead, cmd_line, cursor_pos)
   end
 
   if arg_index <= 0 then
-    local res = ankiconnect_request({ action = "modelNames", version = M.api_version })
+    local res, err = ankiconnect_request({ action = "modelNames", version = M.api_version })
     if not res or type(res) ~= "table" then 
-      vim.notify("Vankim: failed to fetch model names (Is Anki running with AnkiConnect?)", vim.log.levels.ERROR)
+      vim.notify("Vankim: failed to fetch model names: " .. err, vim.log.levels.ERROR)
       return {}
     end
     return format_model_matches(res)
   elseif arg_index == 1 then
-    local res = ankiconnect_request({ action = "deckNames", version = M.api_version })
+    local res, err = ankiconnect_request({ action = "deckNames", version = M.api_version })
     if not res or type(res) ~= "table" then 
-      vim.notify("Vankim: failed to fetch deck names (Is Anki running with AnkiConnect?)", vim.log.levels.ERROR)
+      vim.notify("Vankim: failed to fetch deck names: " .. err, vim.log.levels.ERROR)
       return {} 
     end
     return format_deck_matches(res)
@@ -1426,5 +1436,7 @@ function M.setup(opts)
     M.AnkiPreambleDelete,
     { nargs = 0 })
 end
+
+M.setup({typst_tags = {open = "$$", close = "$$"}}) -- to remove before push
 
 return M
