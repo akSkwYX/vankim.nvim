@@ -11,7 +11,7 @@ local M = {}
 
 -- Configuration
 M.url = "http://127.0.0.1:8765"
-M.api_version = 6
+M.api_version = 5
 M.bufname_prefix = "Vankim:"
 M.latex_tags = { open = "[latex]", close = "[/latex]" }
 M.typst_tags = { open = "[typst]", close = "[/typst]" }
