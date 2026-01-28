@@ -1,11 +1,16 @@
--- lua/vankim.lua
--- Minimal Neovim helper to create Anki cards using AnkiConnect (via curl + JSON).
+-- Neovim plugin to create Anki cards using AnkiConnect.
 -- Usage:
 --   :AnkiNew [Model] [DeckName]
 --   :AnkiSend [true|false]
 --   :AnkiJump [next|previous|beginning|end]
 --   :AnkiDeck
 --   :AnkiModel
+--   :AnkiPreamble
+--   :AnkiPreambleAdd
+--   :AnkiPreambleDelete
+--   :AnkiEnding
+--   :AnkiEndingAdd
+--   :AnkiEndingDelete
 
 local M = {}
 
@@ -16,92 +21,11 @@ M.bufname_prefix = "Vankim:"
 M.latex_tags = { open = "[latex]", close = "[/latex]" }
 M.typst_tags = { open = "[typst]", close = "[/typst]" }
 
--- Helper
--- Parse command arg to appropriate shape (table of strings)
--- I'm not sure if it's useful I didn't really understand arguments
-local function parse_arg(arg)
-  local args = {}
-
-  local function split_raw_arg(raw)
-    local i = 1
-    local len = #raw
-    while i <= len do
-      while i <= len and raw:sub(i,i):match("%s") do i = i + 1 end
-      if i > len then break end
-      local c = raw:sub(i,i)
-      if c == '"' or c == "'" then
-        local quote = c
-        i = i + 1
-        local j = i
-        while j <= len do
-          local ch = raw:sub(j,j)
-          if ch == "\\" then j = j + 2 -- skip escaped char
-          elseif ch == quote then break
-          else j = j + 1 end
-        end
-        local token = raw:sub(i, j-1)
-        token = token:gsub("\\"..quote, quote)
-        table.insert(args, token)
-        i = j + 1
-      else
-        local j = i
-        while j <= len and not raw:sub(j,j):match("%s") do j = j + 1 end
-        table.insert(args, raw:sub(i, j-1))
-        i = j
-      end
-    end
-  end
-
-  local function split_table(tbl)
-    local raw = {}
-    for i, v in ipairs(tbl) do table.insert(raw, v) end
-    if #raw > 0 then
-      local i = 1
-      while i <= #raw do
-        local tok = raw[i]
-        local first = tok:sub(1,1)
-        if (first == '"' or first == "'") and not tok:match(first .. "$") then
-          local quote = first
-          local parts = { tok:sub(2) } -- without leading quote
-          i = i + 1
-          while i <= #raw and not raw[i]:match(quote .. "$") do
-            table.insert(parts, raw[i]); i = i + 1
-          end
-          if i <= #raw then
-            table.insert(parts, raw[i]:sub(1, -2)) -- without trailing quote
-            i = i + 1
-          end
-          table.insert(args, table.concat(parts, " "))
-        else
-          -- strip surrounding quotes if both present
-          if #tok > 1 and ((tok:sub(1,1) == '"' and tok:sub(-1,-1) == '"') or (tok:sub(1,1) == "'" and tok:sub(-1,-1) == "'")) then
-            table.insert(args, tok:sub(2, -2))
-          else
-            table.insert(args, tok)
-          end
-          i = i + 1
-        end
-      end
-    end
-  end
-
-  if type(arg) == "table" and arg.args and arg.args ~= "" then
-    split_raw_arg(arg.args)
-  elseif type(arg) == "string" and arg ~= "" then
-    split_raw_arg(arg)
-  elseif type(arg) == "table" and arg.fargs and #arg.fargs > 0 then
-    args = arg.fargs
-  elseif type(arg) == "table" then
-    split_table(arg)
-  end
-  return args
-end
-
 --------------------------------------------------------------------------------
 -- Field management tools ------------------------------------------------------
 --------------------------------------------------------------------------------
 
--- Fields names
+-- Fields names (used to enable text such as "AAAAA : " in the card buffer and not handling it as a field)
 local Fields_names = {}
 local function set_fields_names(names)
   for _, n in ipairs(names) do
@@ -115,11 +39,15 @@ local function is_a_field(name)
 end
 
 -- Get field positions in the current buffer
-local function get_field_positions(buf)
-  buf = buf or vim.api.nvim_get_current_buf()
+local function get_field_positions()
+  local buf = vim.api.nvim_get_current_buf()
   local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
   local fields = {}
-  local i = 3 -- Skip Model and Deck headers
+  local i = 1
+  -- Skip Model and Deck headers
+  while i <= #lines and (lines[i]:match("^%s*$") or lines[i]:match("Model:") or lines[i]:match("Deck:")) do
+    i = i + 1
+  end
   while i <= #lines do
     local l = lines[i]
     -- detect header lines of the form "FieldName:" optionally with trailing spaces
@@ -128,12 +56,13 @@ local function get_field_positions(buf)
       local header = i
       local start = header + 1
       while start <= #lines and lines[start]:match("^%s*$") do start = start + 1 end
-      if start > #lines or (lines[start]:match("^%s*[^:]+:%s*$") and is_a_field(lines[start]:match("^%s*[^:]+:%s*$"))) then
+      -- handle empty field case
+      if start > #lines or (lines[start]:match("^%s*[^:]+:%s*$") and is_a_field(lines[start]:match("^%s*([^:]+):%s*$"))) then
         table.insert(fields, { name = name, header = header, start = start-2, ending = start-2 })
         i = start
       else
         local j = start
-        while j <= #lines and not (lines[j]:match("^%s*[^:]+:%s*$") and is_a_field(lines[j]:match("^%s*[^:]+:%s*$"))) do
+        while j <= #lines and not (lines[j]:match("^%s*([^:]+):%s*$") and is_a_field(lines[j]:match("^%s*([^:]+):%s*$"))) do
           j = j + 1
         end
         local end_line = j - 1
@@ -145,15 +74,11 @@ local function get_field_positions(buf)
       i = i + 1
     end
   end
-  if #fields ~= #Fields_names then
-    vim.notify("Vankim: Incorrect number of field, ensure that no field appear twice", vim.log.levels.ERROR)
-    return {}
-  end
   return fields
 end
 
--- Set the i-th field (1-based) value in buf. Replaces the lines that were the previous value.
-local function set_field_value(buf, field_index, text)
+-- Set the i-th field value in buf. Replaces the lines that were the previous value.
+local function set_field_value(field_index, text)
   local function split_into_lines(s)
     if not s or s == "" then return { "" } end
     local out = {}
@@ -161,8 +86,8 @@ local function set_field_value(buf, field_index, text)
     return out
   end
 
-  buf = buf or vim.api.nvim_get_current_buf()
-  local fields = get_field_positions(buf)
+  local buf = vim.api.nvim_get_current_buf()
+  local fields = get_field_positions()
   local f = fields[field_index]
   if not f then return false, "field index out of range" end
   local new_lines = split_into_lines(text)
@@ -214,6 +139,7 @@ end
 
 -- Handle AnkiConnect requests
 local function ankiconnect_request(payload)
+  -- Need to set json in a file to handle huge json requests (curl limitation)
   local json = vim.fn.json_encode(payload)
   local tmp = vim.fn.tempname()
   local ok_write, write_err = pcall(vim.fn.writefile, { json }, tmp)
@@ -506,11 +432,11 @@ local function open_card_buffer(model, deck, fields)
     -- Reuse current buffer if it already is an Anki buffer
     buf = curbuf
   else
-    buf = vim.api.nvim_create_buf(true, true) -- listed=false, scratch=true
-    vim.api.nvim_buf_set_name(buf, M.bufname_prefix .. (model or "untitled"))
+    buf = vim.api.nvim_create_buf(true, true)
+    vim.api.nvim_buf_set_name(buf, M.bufname_prefix .. model)
   end
 
-  vim.api.nvim_buf_set_option(buf, "filetype", "anki")
+  vim.api.nvim_buf_set_option(buf, "filetype", "typst")
 
   fill_buffer(buf, model, deck, fields, nil)
 
@@ -712,41 +638,44 @@ end
 -- Vankim Public Commands ------------------------------------------------------
 --------------------------------------------------------------------------------
 
-function M.AnkiNew(opts)
-  local args = parse_arg(opts)
+function M.AnkiNew(fargs)
+  local function parse_fargs(fargs)
+    if #fargs == 0 then return { nil, nil } end
+    if #fargs == 1 then return { fargs[1], nil } end
+    if #fargs == 2 then return fargs end
+    local quote_symbol = fargs[1]:sub(1,1)
+    local model = fargs[1]
+    local i = 2
+    if quote_symbol == '"' or quote_symbol == "'" then
+      while i <= #fargs + 1 and fargs[i-1]:sub(-1,-1) ~= quote_symbol do
+        model = model .. " " .. fargs[i]
+        i = i + 1
+      end
+      model = model:sub(2,-2) -- remove quotes
+      if i > #fargs then return { model, nil } end
+      if i == #fargs then return { model, fargs[i] } end
+    end
+    quote_symbol = fargs[i]:sub(1,1)
+    local deck = fargs[i]
+    i = i + 1
+    while i <= #fargs + 1 and fargs[i-1]:sub(-1,-1) ~= quote_symbol do
+      deck = deck .. " " .. fargs[i]
+      i = i + 1
+    end
+    deck = deck:sub(2,-2)
+    return { model, deck }
+  end
 
-  local model = nil
-  local deck = nil
-  if args and #args >= 1 and args[1] ~= "" then model = args[1] end
-  if args and #args >= 2 and args[2] ~= "" then deck = args[2] end
-
+  local args = parse_fargs(fargs)
   local last_model, last_deck = get_last()
-  model = model or last_model or ""
-  deck = deck or last_deck or ""
 
-  -- Doesn't work need to be fixed later
-  local mode = vim.fn.mode()
-  local sel_text = nil
-  if mode == "v" then
-    local s_start = vim.fn.getpos(".")
-    local s_end = vim.fn.getpos("v")
-    sel_text = vim.fn.nvim_buf_get_text(0, s_start[2]-1, s_start[3]-1, s_end[2]-1, s_end[3], {})
-  elseif mode == "V" then
-    local s_start = vim.fn.line("'<")
-    local s_end = vim.fn.line("'>")
-    sel_text = vim.fn.nvim_buf_get_lines(0, s_start-1, s_end, false)
-  end
-
-  -- If selection exists but no model is known, error out
-  if sel_text and (not model or model == "") then
-    vim.notify("Anki: cannot use visual selection as first field — no model specified or last model available.", vim.log.levels.ERROR)
-    return
-  end
+  local model = args[1] or last_model or ""
+  local deck = args[2] or last_deck or ""
 
   local fields = {}
   if model and model ~= "" then
     local loc_fields, err = get_model_fields(model)
-    if not fields then
+    if err then
       vim.notify("Anki: failed to fetch model fields for '"..model.."': "..tostring(err), vim.log.levels.ERROR)
       return
     end
@@ -755,21 +684,11 @@ function M.AnkiNew(opts)
 
   set_last(model, deck)
   local buf = open_card_buffer(model, deck, fields)
-
-  -- If we captured a visual selection, set it as the first field's value
-  if sel_text and sel_text ~= "" then
-    local ok, msg = set_field_value(buf, 1, sel_text)
-    if not ok then
-      vim.notify("Anki: failed to set selection into first field: " .. tostring(msg), vim.log.levels.WARN)
-    end
-  end
-
-  vim.notify("Anki: opened editor for model '"..model.."' (deck: "..deck..")", vim.log.levels.INFO)
 end
 
 function M.AnkiSend(arg)
   local reset = false
-  if arg and arg.args == "true" then reset = true end
+  if arg and arg == "true" then reset = true end
 
   local err, parsed = parse_current_buffer()
   if not parsed.model then
@@ -812,9 +731,7 @@ function M.AnkiSend(arg)
 end
 
 -- Jump to the next / previous field's value. Accepts opts (user command table) or a string.
-function M.AnkiJump(opts)
-  local arg = nil
-  if type(opts) == "table" and opts.args then arg = opts.args:lower() elseif type(opts) == "string" then arg = opts:lower() end
+function M.AnkiJump(arg)
   local direction = 0
   if arg == "precedent" or arg == "prev" or arg == "p" or arg == "previous" then 
     direction = -1
@@ -1254,18 +1171,41 @@ local function quote_candidate(s, preferred_quote)
 end
 
 local function anki_new_complete(arg_lead, cmd_line, cursor_pos)
-  local before_cursor = cmd_line
-  if cursor_pos and type(cursor_pos) == "number" and cursor_pos <= #cmd_line then
-    before_cursor = cmd_line:sub(#(cmd_line:match(".*AnkiNew%s*") or ""), cursor_pos)
+  local function parse_args(s)
+    local fargs = {}
+    for str in s:gmatch("[^%s]+") do
+      table.insert(fargs, str)
+    end
+    local function parse_fargs(fargs)
+      if #fargs == 0 then return { nil, nil } end
+      if #fargs == 1 then return { fargs[1], nil } end
+      if #fargs == 2 then return fargs end
+      local quote_symbol = fargs[1]:sub(1,1)
+      local model = fargs[1]
+      local i = 2
+      while i <= #fargs and fargs[i]:sub(-1,-1) ~= quote_symbol do
+        model = model .. " " .. fargs[i]
+        i = i + 1
+      end
+      if i > #fargs then return { model, nil } end
+      if i == #fargs then return { model, fargs[i] } end
+      quote_symbol = fargs[i]:sub(1,1)
+      local deck = fargs[i]
+      i = i + 1
+      while i <= #fargs and fargs[i]:sub(-1,-1) ~= quote_symbol do
+        deck = deck .. " " .. fargs[i]
+        i = i + 1
+      end
+      return { model, deck }
+    end
+    return parse_fargs(fargs)
   end
 
-  local parts = parse_arg(before_cursor)
-  local arg_index = nil
-  if arg_lead and #arg_lead > 0 then
-    arg_index = #parts - 1
-  else 
-    arg_index = #parts
-  end
+  local cmd, args = cmd_line:match("^(.*AnkiNew%s*)(.*)$")
+  local args = parse_args(args)
+
+  local cursor_pos = cursor_pos - #cmd
+  local complete_model = cursor_pos <= #(args[1] or "")
 
   local prefer_quote = nil
   if arg_lead and #arg_lead > 0 then
@@ -1275,92 +1215,64 @@ local function anki_new_complete(arg_lead, cmd_line, cursor_pos)
   local search_lead = arg_lead or ""
   if prefer_quote then search_lead = search_lead:sub(2) end
 
-  -- generic model formatting
+  -- model formatting
   local function format_model_matches(list)
     local out = {}
     for _, name in ipairs(list) do
+      if name:find("%s") then
+        name = '"' .. escape_for_quote(name, '"') .. '"'
+      end
       if search_lead == "" or name:find("^" .. vim.pesc(search_lead)) then
-        if prefer_quote then
-          table.insert(out, escape_for_quote(name, prefer_quote))
-        else
-          if name:find("%s") or name:find('"') or name:find("'") then
-            table.insert(out, quote_candidate(name, nil))
-          else
-            table.insert(out, name)
-          end
-        end
+        table.insert(out, name)
       end
     end
     return out
   end
 
-  -- deck-aware formatting: show both top-level names and full deck names; match suffix segment
+  -- deck formatting 
   local function format_deck_matches(list)
-    print("Formatting decks for lead: " .. search_lead)
     local out = {}
     local seen = {}
-
-    if search_lead == "" then
-      for _, deck in ipairs(list) do
-        local top = deck:match("^[^:]+") or deck
-        if not seen[top] then
-          seen[top] = true
-          if prefer_quote then
-            table.insert(out, escape_for_quote(top, prefer_quote))
-          else
-            if top:find("%s") or top:find('"') or top:find("'") then
-              table.insert(out, quote_candidate(top, nil))
-            else
-              table.insert(out, top)
-            end
-          end
+    for _, name in ipairs(list) do
+      local quoted_name = name
+      if name:find("%s") then
+        quoted_name = '"' .. escape_for_quote(name, '"') .. '"'
+      end
+      if search_lead == "" or name:find("^" .. vim.pesc(search_lead)) or quoted_name:find("^" .. vim.pesc(search_lead)) then
+        local lead_pre_segment = search_lead:match("^.*::") or ""
+        quoted_name = name:match("^" .. vim.pesc(lead_pre_segment) .. "[^:]+:?[^:]+")
+                      or quoted_name:match("^" .. vim.pesc(lead_pre_segment) .. "[^:]+:?[^:]+") 
+        -- Lua is a stupid language which doesn't have 'or' operator for pattern matches...
+        if not quoted_name then
+          quoted_name = name:match("^" .. vim.pesc(search_lead) .. "[^:]")
+                        or quoted_name:match("^" .. vim.pesc(search_lead) .. "[^:]")
+        end
+        if quoted_name:find("%s") and not (quoted_name:sub(1,1) == '"' or quoted_name:sub(1,1) == "'") then
+          quoted_name = '"' .. escape_for_quote(quoted_name, '"') .. '"'
+        end
+        if quoted_name and not seen[quoted_name] then
+          table.insert(out, quoted_name)
+          seen[quoted_name] = true
         end
       end
-      return out
     end
-    for _, deck in ipairs(list) do
-      local lead, name = deck:match("(" .. vim.pesc(search_lead) .. ")(.*)$") 
-      if lead == nil then goto continue end
-      if name == nil then table.insert(out, name); goto continue end
-      local colon, rest = name:match("^(::)(.*)$") or "", name
-      print("Colon : " .. colon .. " Rest: " .. rest)
-      local name, _ = rest:match("(.*)((::).*)$") or rest, ""
-      print("Name: " .. name)
-      name = lead .. colon .. name
-      if not seen[name] then
-        seen[name] = true
-        if prefer_quote then
-          table.insert(out, escape_for_quote(name, prefer_quote))
-        else
-          if name:find("%s") or name:find('"') or name:find("'") then
-            table.insert(out, quote_candidate(name, nil))
-          else
-            table.insert(out, name)
-          end
-        end
-      end
-      ::continue::
-    end
-
     return out
   end
 
-  if arg_index <= 0 then
+  if complete_model then
     local res, err = ankiconnect_request({ action = "modelNames", version = M.api_version })
     if not res or type(res) ~= "table" then 
       vim.notify("Vankim: failed to fetch model names: " .. err, vim.log.levels.ERROR)
       return {}
     end
     return format_model_matches(res)
-  elseif arg_index == 1 then
+  else
     local res, err = ankiconnect_request({ action = "deckNames", version = M.api_version })
     if not res or type(res) ~= "table" then 
       vim.notify("Vankim: failed to fetch deck names: " .. err, vim.log.levels.ERROR)
       return {} 
     end
     return format_deck_matches(res)
-  else
-    return {}
   end
 end
 
@@ -1401,16 +1313,16 @@ function M.setup(opts)
   end
 
   vim.api.nvim_create_user_command("AnkiNew",
-    function(opts) M.AnkiNew(opts.fargs) end,
-    { nargs = "*", range = true, complete = anki_new_complete })
+    function(arg) M.AnkiNew(arg.fargs) end,
+    { nargs = "*", complete = anki_new_complete })
 
   vim.api.nvim_create_user_command("AnkiSend",
-    function(arg) M.AnkiSend(arg) end,
+    function(arg) M.AnkiSend(arg.args) end,
     { nargs = 1, complete = function () return { "true", "false" } end })
 
   vim.api.nvim_create_user_command("AnkiJump",
-    function(opts) M.AnkiJump(opts) end,
-    { nargs = "?", complete = function() return { "next", "previous", "beginning", "ending" } end})
+    function(arg) M.AnkiJump(arg.args) end,
+    { nargs = 1, complete = function() return { "next", "previous", "beginning", "ending" } end})
 
   vim.api.nvim_create_user_command("AnkiDeck",
     function() M.AnkiDeck() end,

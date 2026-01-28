@@ -1,0 +1,50 @@
+name: build-tree-sitter-anki
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - name: linux-x64
+            runs-on: ubuntu-latest
+            out: parser.so
+            compile-cmd: gcc -O2 -shared -fPIC -o parser.so src/parser.c src/scanner.c
+          - name: macos-x64
+            runs-on: macos-latest
+            out: parser.dylib
+            compile-cmd: cc -O2 -dynamiclib -o parser.dylib src/parser.c src/scanner.c
+
+    runs-on: ${{ matrix.runs-on }}
+    name: Build (${{ matrix.name }})
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      - name: Install tree-sitter CLI
+        run: npm install -g tree-sitter-cli
+
+      - name: Generate parser (tree-sitter)
+        run: |
+          cd grammar
+          tree-sitter generate
+
+      - name: Build shared lib
+        working-directory: grammar
+        run: |
+          echo "Compiling with: ${{ matrix.compile-cmd }}"
+          eval "${{ matrix.compile-cmd }}"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: anki-parser-${{ matrix.name }}
+          path: grammar/${{ matrix.out }}
