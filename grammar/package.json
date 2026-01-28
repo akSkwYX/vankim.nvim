@@ -4,5 +4,5 @@
    "description": "Tree-sitter grammar for anki filetype",
    "main": "grammar.js",
    "keywords": ["tree-sitter", "grammar", "anki"],
-   "license": "MIT",
+   "license": "MIT"
 }
