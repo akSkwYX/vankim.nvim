@@ -1144,6 +1144,25 @@ function M.AnkiPreambleDelete()
   end)
 end
 
+function M.AnkiTags(tag)
+  local buf = vim.api.nvim_get_current_buf()
+  local cursor_pos = vim.api.nvim_win_get_cursor(0)
+  local row = cursor_pos[1]
+  local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+  local new_lines = {}
+  for i, l in ipairs(lines) do
+    if i == row then
+      if tag == "typst" then
+        l = M.typst_tags.open .. l .. M.typst_tags.close
+      elseif tag == "latex" then
+        l = M.latex_tags.open .. l .. M.latex_tags.close
+      end
+    end
+  end
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+  vim.api.nvim_win_set_cursor(0, { row, cursor_pos[2]+7 })
+end
+
 -- Setup: create user commands
 -- Completion for :AnkiNew that wraps suggestions in quotes but still filters on partial input.
 local function escape_for_quote(s, quote)
@@ -1308,6 +1327,8 @@ local function anki_move_to_field_complete(arg_lead, cmd_line, cursor_pos)
 end
 
 function M.setup(opts)
+  require("vankim.treesitter").setup()
+
   for k,v in pairs(opts or {}) do
     M[k] = v
   end
@@ -1347,8 +1368,10 @@ function M.setup(opts)
   vim.api.nvim_create_user_command("AnkiPreambleDelete",
     M.AnkiPreambleDelete,
     { nargs = 0 })
-end
 
-M.setup({typst_tags = {open = "$$", close = "$$"}}) -- to remove before push
+  vim.api.nvim_create_user_command("AnkiTags",
+    function(arg) M.AnkiTags(arg.args) end,
+    { nargs = 1, complete = function() return { "typst", "latex" } end })
+end
 
 return M

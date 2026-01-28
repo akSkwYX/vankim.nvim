@@ -1,37 +1,44 @@
 module.exports = grammar({
    name: 'anki',
 
-   extras: $ => [],
+   extras: $ => [/\s/],
 
    rules: {
-      source_file: $ => repeat(choice($.header, $.field, $.blank_line)),
-
-      blank_line: $ => token(/\s*\n/),
+      source_file: $ => seq(
+         $.header,
+         $.header,
+         repeat($.field)
+      ),
 
       header: $ => seq(
-         field('key', token(choice(/Model/, /Deck/))),
+         field('key', alias(token(choice('Model', 'Deck')), $.key_name)),
          ':',
-         field('value', token(/.*\n/))
+         field('value', alias(/[^\n]*/, $.value_content))
       ),
 
       field: $ => seq(
-         field('name', token(/[^\n:]+/)),
-         ':',
-         optional(field('body', repeat(choice($.typst_block, $.latex_block, $.text_line, $.blank_line))))
+         field('name', alias(token(/[^:\n]+:\n/), $.field_name)),
+         field('body', repeat(choice(
+            $.typst_block, 
+            $.latex_block, 
+            $.text
+         )))
       ),
 
-      text_line: $ => token(/(?:[^\[\n]|\[(?!\/?(typst|latex)\]))+\n?/),
-
       typst_block: $ => seq(
-         token('[typst]'),
-         field('content', token(/[\s\S]*?(?=\[\/typst\])/)),
-         token('[/typst]')
+         field('typst_open_tag', alias('[typst]', $.typst_open_tag)),
+         field('content', alias($._block_content, $.typst)),
+         field('typst_close_tag', alias('[/typst]', $.typst_close_tag))
       ),
 
       latex_block: $ => seq(
-         token('[latex]'),
-         field('content', token(/[\s\S]*?(?=\[\/latex\])/)),
-         token('[/latex]')
+         field('latex_open_tag', alias('[latex]', $.latex_open_tag)),
+         field('content', alias($._block_content, $.latex)),
+         field('latex_close_tag', alias('[/latex]', $.latex_close_tag))
       ),
+
+      _block_content: $ => prec(-1, repeat1(choice(/./, /\n/))),
+
+      text: $ => /[^\[\n]+/
    }
 });

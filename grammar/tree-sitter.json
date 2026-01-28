@@ -1,0 +1,22 @@
+{
+  "grammars": [
+    {
+      "name": "anki",
+      "camelcase": "Anki",
+      "scope": "source.anki",
+      "file-types": [
+        "anki"
+      ],
+      "path": ".",
+      "abi_version": 15
+    }
+  ],
+  "metadata": {
+    "version": "0.1.0",
+    "license": "MIT",
+    "description": "Anki card grammar for Vankim",
+    "links": {
+      "repository": "https://github.com/akSkwYX/vankim.nvim"
+    }
+  }
+}

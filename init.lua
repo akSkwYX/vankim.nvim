@@ -1,1 +1,1 @@
-return require("vankim.lua")
+return require("vankim.vankim.lua")

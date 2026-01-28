@@ -1,0 +1,200 @@
+[
+  {
+    "type": "field",
+    "named": true,
+    "fields": {
+      "body": {
+        "multiple": true,
+        "required": false,
+        "types": [
+          {
+            "type": "latex_block",
+            "named": true
+          },
+          {
+            "type": "text",
+            "named": true
+          },
+          {
+            "type": "typst_block",
+            "named": true
+          }
+        ]
+      },
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "field_name",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "header",
+    "named": true,
+    "fields": {
+      "key": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "key_name",
+            "named": true
+          }
+        ]
+      },
+      "value": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "value_content",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "latex",
+    "named": true,
+    "fields": {}
+  },
+  {
+    "type": "latex_block",
+    "named": true,
+    "fields": {
+      "content": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "latex",
+            "named": true
+          }
+        ]
+      },
+      "latex_close_tag": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "latex_close_tag",
+            "named": true
+          }
+        ]
+      },
+      "latex_open_tag": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "latex_open_tag",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "source_file",
+    "named": true,
+    "root": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "field",
+          "named": true
+        },
+        {
+          "type": "header",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "typst",
+    "named": true,
+    "fields": {}
+  },
+  {
+    "type": "typst_block",
+    "named": true,
+    "fields": {
+      "content": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "typst",
+            "named": true
+          }
+        ]
+      },
+      "typst_close_tag": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "typst_close_tag",
+            "named": true
+          }
+        ]
+      },
+      "typst_open_tag": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "typst_open_tag",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": ":",
+    "named": false
+  },
+  {
+    "type": "field_name",
+    "named": true
+  },
+  {
+    "type": "key_name",
+    "named": true
+  },
+  {
+    "type": "latex_close_tag",
+    "named": true
+  },
+  {
+    "type": "latex_open_tag",
+    "named": true
+  },
+  {
+    "type": "text",
+    "named": true
+  },
+  {
+    "type": "typst_close_tag",
+    "named": true
+  },
+  {
+    "type": "typst_open_tag",
+    "named": true
+  },
+  {
+    "type": "value_content",
+    "named": true
+  }
+]
