@@ -1308,6 +1308,8 @@ local function anki_move_to_field_complete(arg_lead, cmd_line, cursor_pos)
 end
 
 function M.setup(opts)
+  require("vankim.treesitter.lua").setup()
+
   for k,v in pairs(opts or {}) do
     M[k] = v
   end
@@ -1348,7 +1350,5 @@ function M.setup(opts)
     M.AnkiPreambleDelete,
     { nargs = 0 })
 end
-
-M.setup({typst_tags = {open = "$$", close = "$$"}}) -- to remove before push
 
 return M
