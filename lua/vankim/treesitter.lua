@@ -28,7 +28,7 @@ local function plugin_root()
   local info = debug.getinfo(1, "S")
   if not info or not info.source then return nil end
   local this_file = info.source:sub(2)
-  local root = vim.fn.fnamemodify(this_file, ":h:h")
+  local root = vim.fn.fnamemodify(this_file, ":h:h:h")
   return root
 end
 
