@@ -1,7 +1,7 @@
 {
    "name": "anki",
    "version": "0.0.0",
-   "abi-version": 15,
+   "abi_version": 15,
    "license": "MIT",
    "metadata": {
       "module_type": "parser"
