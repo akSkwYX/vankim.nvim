@@ -1,8 +1,0 @@
-{
-   "name": "tree-sitter-anki",
-   "version": "0.0.0",
-   "description": "Tree-sitter grammar for anki filetype",
-   "main": "grammar.js",
-   "keywords": ["tree-sitter", "grammar", "anki"],
-   "license": "MIT"
-}
