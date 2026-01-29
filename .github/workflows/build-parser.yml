@@ -12,11 +12,11 @@ jobs:
           - name: linux-x64
             runs-on: ubuntu-latest
             out: parser.so
-            compile-cmd: gcc -O2 -shared -fPIC -o parser.so src/parser.c src/scanner.c
+            compile-cmd: gcc -O2 -shared -fPIC -Isrc -o parser.so src/parser.c
           - name: macos-x64
             runs-on: macos-latest
             out: parser.dylib
-            compile-cmd: cc -O2 -dynamiclib -o parser.dylib src/parser.c src/scanner.c
+            compile-cmd: cc -O2 -dynamiclib -Isrc -o parser.dylib src/parser.c
 
     runs-on: ${{ matrix.runs-on }}
     name: Build (${{ matrix.name }})
@@ -27,7 +27,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: '18'
+          node-version: '20'
 
       - name: Install tree-sitter CLI
         run: npm install -g tree-sitter-cli
