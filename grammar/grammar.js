@@ -34,8 +34,8 @@ module.exports = grammar({
          '[/latex]'
       ),
 
-      _block_content: $ => /([^\[]|\[(?!\/(typst|latex)\]))*/,
+      _block_content: $ => prec(-1, repeat1(choice(/./, /\n/))),
 
-      text: $ => /[^\[]+/
+      text: $ => /[^\[\n]+/
    }
 });
