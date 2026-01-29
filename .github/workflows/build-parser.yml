@@ -1,7 +1,8 @@
 name: build-tree-sitter-anki
 on:
   push:
-    branches: [ main ]
+    tags:
+      - 'v*'
   workflow_dispatch:
 
 jobs:
@@ -43,8 +44,10 @@ jobs:
           echo "Compiling with: ${{ matrix.compile-cmd }}"
           eval "${{ matrix.compile-cmd }}"
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
         with:
-          name: anki-parser-${{ matrix.name }}
-          path: grammar/${{ matrix.out }}
+          files: grammar/${{ matrix.out }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

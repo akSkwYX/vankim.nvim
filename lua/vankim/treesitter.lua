@@ -70,8 +70,11 @@ function M.setup(opts)
       local cfg = parsers.get_parser_configs()
       cfg.anki = cfg.anki or {}
       cfg.anki.filetype = cfg.anki.filetype or "anki"
+      return true
+    else
+      vim.notify("Vankim: Error configuring nvim-treesitter parser for Anki", vim.log.levels.ERROR)
+      return false
     end
-    return true
   end
 
   return false
