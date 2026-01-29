@@ -1,37 +1,41 @@
 module.exports = grammar({
    name: 'anki',
 
-   extras: $ => [],
+   extras: $ => [/\s/],
 
    rules: {
-      source_file: $ => repeat(choice($.header, $.field, $.blank_line)),
-
-      blank_line: $ => token(/\s*\n/),
+      source_file: $ => repeat(choice($.header, $.field)),
 
       header: $ => seq(
-         field('key', token(choice(/Model/, /Deck/))),
+         field('key', token(choice('Model', 'Deck'))),
          ':',
-         field('value', token(/.*\n/))
+         field('value', /.*/)
       ),
 
       field: $ => seq(
-         field('name', token(/[^\n:]+/)),
+         field('name', /[^:\n]+/),
          ':',
-         optional(field('body', repeat(choice($.typst_block, $.latex_block, $.text))))
+         field('body', repeat(choice(
+            $.typst_block, 
+            $.latex_block, 
+            $.text
+         )))
       ),
 
-      text: $ => token(/[^[]+/),
-
       typst_block: $ => seq(
-         token('[typst]'),
-         repeat(choice($.text)),
-         token('[/typst]')
+         '[typst]',
+         field('content', alias($._block_content, $.typst)),
+         '[/typst]'
       ),
 
       latex_block: $ => seq(
-         token('[latex]'),
-         repeat(choice($.text)),
-         token('[/latex]')
+         '[latex]',
+         field('content', alias($._block_content, $.latex)),
+         '[/latex]'
       ),
+
+      _block_content: $ => /([^\[]|\[(?!\/(typst|latex)\]))*/
+
+      text: $ => /[^\[]+/
    }
 });
