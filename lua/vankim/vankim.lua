@@ -1158,8 +1158,9 @@ function M.AnkiTags(tag)
         l = M.latex_tags.open .. l .. M.latex_tags.close
       end
     end
+    table.insert(new_lines, l)
   end
-  vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, new_lines)
   vim.api.nvim_win_set_cursor(0, { row, cursor_pos[2]+7 })
 end
 
