@@ -5,17 +5,17 @@
 local M = {}
 
 -- Helpers to store last-used model/deck in vim.g
----@param model string
----@param deck string
+---@param model string|nil
+---@param deck string|nil
 function M.set_last(model, deck)
   if model then vim.g.vankim_last_model = model end
   if deck  then vim.g.vankim_last_deck = deck  end
 end
 
----@return string model
----@return string deck
+---@return string|nil model
+---@return string|nil deck
 function M.get_last()
-  return vim.g.vankim_last_model, vim.g.vankim_last_deck
+  return vim.g.vankim_last_model or nil, vim.g.vankim_last_deck or nil
 end
 
 -- Handle AnkiConnect requests
@@ -30,7 +30,7 @@ function M.ankiconnect_request(payload)
   if not ok_write then
     return nil, "failed to write temp payload: " .. tostring(write_err)
   end
-  
+
   local cmd = { "curl", "-s", "-X", "POST", "-H", "Content-Type: application/json", "-d", "@" .. tmp, M.url }
   local ok_res = vim.fn.system(cmd)
   if not ok_res or ok_res == "" then

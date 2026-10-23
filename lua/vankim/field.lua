@@ -37,17 +37,17 @@ function M.get_field_positions()
     local l = lines[i]
     -- detect header lines of the form "FieldName:" optionally with trailing spaces
     local name = l:match("^%s*([^:]+):%s*$")
-    if name and is_a_field(name) then
+    if name and M.is_a_field(name) then
       local header = i
       local start = header + 1
       while start <= #lines and lines[start]:match("^%s*$") do start = start + 1 end
       -- handle empty field case
-      if start > #lines or (lines[start]:match("^%s*[^:]+:%s*$") and is_a_field(lines[start]:match("^%s*([^:]+):%s*$"))) then
+      if start > #lines or (lines[start]:match("^%s*[^:]+:%s*$") and M.is_a_field(lines[start]:match("^%s*([^:]+):%s*$"))) then
         table.insert(fields, { name = name, header = header, start = header, ending = header })
         i = start
       else
         local j = start
-        while j <= #lines and not (lines[j]:match("^%s*([^:]+):%s*$") and is_a_field(lines[j]:match("^%s*([^:]+):%s*$"))) do
+        while j <= #lines and not (lines[j]:match("^%s*([^:]+):%s*$") and M.is_a_field(lines[j]:match("^%s*([^:]+):%s*$"))) do
           j = j + 1
         end
         local end_line = j - 1

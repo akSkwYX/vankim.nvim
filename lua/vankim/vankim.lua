@@ -14,7 +14,9 @@ local M = {}
 
 -- Configuration
 M.url = "http://127.0.0.1:8765"
+ankiconnect.url = M.url
 M.api_version = 5
+ankiconnect.api_version = M.api_version
 M.bufname = "Vankim"
 M.latex_tags = { open = "[latex]", close = "[/latex]" }
 M.typst_tags = { open = "[typst]", close = "[typst]" }
@@ -60,7 +62,7 @@ function M.AnkiNew(fargs)
   local fields = {}
   if model and model ~= "" then
     local loc_fields, err = ankiconnect.get_model_fields(model)
-    if err then
+    if err or not loc_fields then
       vim.notify("Anki: failed to fetch model fields for '"..model.."': "..tostring(err), vim.log.levels.ERROR)
       return
     end
@@ -68,7 +70,7 @@ function M.AnkiNew(fargs)
   end
 
   ankiconnect.set_last(model, deck)
-  local buf = buffer_tools.open_card_buffer(model, deck, fields)
+  buffer_tools.open_card_buffer(model, deck, fields)
 end
 
 function M.AnkiSend(arg)
@@ -117,7 +119,7 @@ end
 -- Jump to the next / previous field's value. Accepts opts (user command table) or a string.
 function M.AnkiJump(arg)
   local direction = 0
-  if arg == "precedent" or arg == "prev" or arg == "p" or arg == "previous" then 
+  if arg == "precedent" or arg == "prev" or arg == "p" or arg == "previous" then
     direction = -1
   elseif arg == "next" or arg == "n" then
     direction = 1
@@ -125,7 +127,7 @@ function M.AnkiJump(arg)
 
   local buf = vim.api.nvim_get_current_buf()
   local row = vim.api.nvim_win_get_cursor(0)[1]
-  local fields = fields.get_field_positions(buf)
+  local fields = fields.get_field_positions()
   if #fields == 0 then vim.notify("Anki: no fields found", vim.log.levels.WARN); return end
 
   local target = nil
@@ -137,8 +139,8 @@ function M.AnkiJump(arg)
   target = fields[((current_field-1+direction) % #fields) + 1]
 
   local position = { target.start, 0 }
-  if arg == "ending" or arg == "end" or arg == "e" then 
-    position = { target.ending, #(vim.api.nvim_get_current_line()) - 1 } 
+  if arg == "ending" or arg == "end" or arg == "e" then
+    position = { target.ending, #(vim.api.nvim_get_current_line()) - 1 }
   end
   vim.api.nvim_win_set_cursor(0, position)
 end
@@ -233,13 +235,17 @@ function M.AnkiModel()
         -- parse current buffer content
         local buf = vim.api.nvim_get_current_buf()
         local _, parsed = buffer_tools.parse_current_buffer()
-        local old_fields_map = parsed.fields or {}
+        local old_fields_map
+        if not parsed then old_fields_map = {}
+        else old_fields_map = parsed.fields or {} end
         -- get names in order from current buffer using positions
-        local old_pos = fields.get_field_positions(buf)
+        local old_pos = fields.get_field_positions()
         local old_order = {}
         for _, f in ipairs(old_pos) do table.insert(old_order, f.name) end
 
-        local deck = parsed.deck or vim.g.anki_last_deck or ""
+        local deck
+        if not parsed then deck = vim.g.anki_last_deck or ""
+        else deck = parsed.deck or vim.g.anki_last_deck or "" end
 
         -- fetch new model field names
         local new_fields, ferr = ankiconnect.get_model_fields(new_model)
@@ -322,21 +328,6 @@ local function escape_for_quote(s, quote)
   return s
 end
 
-local function quote_candidate(s, preferred_quote)
-  if preferred_quote == '"' then
-    return '"' .. escape_for_quote(s, '"') .. '"'
-  elseif preferred_quote == "'" then
-    return "'" .. escape_for_quote(s, "'") .. "'"
-  else
-    -- choose a quote that doesn't appear in s if possible
-    if s:find('"') and not s:find("'") then
-      return "'" .. escape_for_quote(s, "'") .. "'"
-    else
-      return '"' .. escape_for_quote(s, '"') .. '"'
-    end
-  end
-end
-
 local function anki_new_complete(arg_lead, cmd_line, cursor_pos)
   local function parse_args(s)
     local fargs = {}
@@ -408,7 +399,7 @@ local function anki_new_complete(arg_lead, cmd_line, cursor_pos)
       if search_lead == "" or name:find("^" .. vim.pesc(search_lead)) or quoted_name:find("^" .. vim.pesc(search_lead)) then
         local lead_pre_segment = search_lead:match("^.*::") or ""
         quoted_name = name:match("^" .. vim.pesc(lead_pre_segment) .. "[^:]+:?[^:]+")
-                      or quoted_name:match("^" .. vim.pesc(lead_pre_segment) .. "[^:]+:?[^:]+") 
+                      or quoted_name:match("^" .. vim.pesc(lead_pre_segment) .. "[^:]+:?[^:]+")
         -- Lua is a stupid language which doesn't have 'or' operator for pattern matches...
         if not quoted_name then
           quoted_name = name:match("^" .. vim.pesc(search_lead) .. "[^:]")
@@ -428,16 +419,16 @@ local function anki_new_complete(arg_lead, cmd_line, cursor_pos)
 
   if complete_model then
     local res, err = ankiconnect.ankiconnect_request({ action = "modelNames", version = M.api_version })
-    if not res or type(res) ~= "table" then 
+    if not res or type(res) ~= "table" then
       vim.notify("Vankim: failed to fetch model names: " .. err, vim.log.levels.ERROR)
       return {}
     end
     return format_model_matches(res)
   else
     local res, err = ankiconnect.ankiconnect_request({ action = "deckNames", version = M.api_version })
-    if not res or type(res) ~= "table" then 
+    if not res or type(res) ~= "table" then
       vim.notify("Vankim: failed to fetch deck names: " .. err, vim.log.levels.ERROR)
-      return {} 
+      return {}
     end
     return format_deck_matches(res)
   end
